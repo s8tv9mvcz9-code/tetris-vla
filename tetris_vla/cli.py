@@ -393,6 +393,130 @@ def cmd_compare(a: argparse.Namespace) -> int:
     return 0
 
 
+PILOT_KINDS = ("pd", "random", "coast", "vla-mock", "vla-ollama",
+               "vla-oracle", "vla-vlm", "vla-solo", "vla-zeroshot")
+
+
+def _build_pilot(a: argparse.Namespace):
+    """パイロットを 1 つ作る。VLA 系は lerobot が必要なので遅延 import。"""
+    from .parachute import (MockFlightBackend, MockFlightConfig, OllamaFlightBackend,
+                            PDPilot, RandomPilot, VLAPilot)
+
+    k = a.pilot
+    if k == "pd":
+        return PDPilot()
+    if k == "random":
+        return RandomPilot(seed=a.seed)
+    if k == "coast":
+        from .parachute import FlightDecision, Thrust
+
+        class _Coast:
+            name = "coast"
+
+            def decide(self, obs):
+                return FlightDecision(Thrust.COAST, None, "何もしない")
+
+        return _Coast()
+    if k == "vla-mock":
+        return VLAPilot(MockFlightBackend(
+            MockFlightConfig(skill=a.skill, latency_s=a.latency), seed=a.seed), lang=a.lang)
+    if k == "vla-ollama":
+        be = OllamaFlightBackend(model=a.model, host=a.host, num_predict=a.num_predict)
+        print(be.health(), file=sys.stderr)
+        return VLAPilot(be, lang=a.lang)
+    # ここから SmolVLA 系
+    from .smolvla_pilot import make_pilot
+
+    return make_pilot(k, checkpoint=a.checkpoint, device=a.device,
+                      vlm_model=a.model, vlm_every=a.vlm_every)
+
+
+def cmd_fly(a: argparse.Namespace) -> int:
+    """パラシュート降下デモ。入力と判断を出しながら 1 機降ろす。"""
+    from .parachute import ParachuteConfig, live_flight, save_flight
+
+    cfg = ParachuteConfig(width=a.width, height=a.height, wind=a.wind, gust=a.gust,
+                          fuel=a.fuel, seed=a.seed)
+    rc = RenderConfig(cell_px=a.cell_px)
+    pilot = _build_pilot(a)
+    period = 1 if a.pilot.startswith("vla-") and a.pilot not in ("vla-mock", "vla-ollama") \
+        else a.decision_period
+    res = live_flight(pilot, cfg, seed=a.seed, kind=a.kind, decision_period=period,
+                      render_cfg=rc, realtime=a.realtime, dump_dir=a.dump_frames)
+    if a.log:
+        save_flight(res, a.log, cfg)
+        print(f"\n記録: {a.log}", file=sys.stderr)
+    if a.svg or a.html:
+        from .parachute import load_flight
+        from .svganim import flight_html, flight_svg
+
+        tmp = a.log or os.path.join(os.path.dirname(a.svg or a.html) or ".", "_flight.jsonl")
+        if not a.log:
+            save_flight(res, tmp, cfg)
+        data = load_flight(tmp)
+        svg = flight_svg(data, speed=a.svg_speed)
+        if a.svg:
+            os.makedirs(os.path.dirname(os.path.abspath(a.svg)) or ".", exist_ok=True)
+            with open(a.svg, "w", encoding="utf-8") as f:
+                f.write(svg)
+            print(f"SVG アニメ: {a.svg}", file=sys.stderr)
+        if a.html:
+            os.makedirs(os.path.dirname(os.path.abspath(a.html)) or ".", exist_ok=True)
+            with open(a.html, "w", encoding="utf-8") as f:
+                f.write(flight_html(data, svg))
+            print(f"HTML (入力+判断): {a.html}", file=sys.stderr)
+    return 0
+
+
+def cmd_flybench(a: argparse.Namespace) -> int:
+    """複数のパイロットを同じ seed 群で走らせて比較する。"""
+    import statistics
+
+    from .parachute import ParachuteConfig, fly
+
+    cfg = ParachuteConfig(width=a.width, height=a.height, wind=a.wind, gust=a.gust, fuel=a.fuel)
+    rc = RenderConfig(cell_px=a.cell_px)
+    seeds = list(range(a.seeds))
+    rows = []
+    for kind in a.pilots.split(","):
+        holder = argparse.Namespace(**{**vars(a), "pilot": kind})
+        pilot = _build_pilot(holder)
+        sc, rg, er, soft, lat, dec, land = [], [], [], 0, [], [], 0
+        for seed in seeds:
+            if hasattr(pilot, "reset"):
+                pilot.reset()
+            period = 1 if kind.startswith("vla-") and kind not in ("vla-mock", "vla-ollama") \
+                else a.decision_period
+            r = fly(pilot, cfg, seed=seed, render_cfg=rc, decision_period=period, keep_png=False)
+            sc.append(r.score); soft += r.soft; land += r.landed
+            lat.append(r.mean_latency_s); dec.append(r.decisions)
+            if r.regret is not None: rg.append(r.regret)
+            if r.col_error is not None: er.append(r.col_error)
+            print(f"  {kind} seed={seed} {r.score:.0f}点", file=sys.stderr)
+        rows.append((kind, statistics.fmean(sc), statistics.fmean(rg) if rg else None,
+                     statistics.fmean(er) if er else None, soft, land,
+                     statistics.fmean(lat), statistics.fmean(dec)))
+    print()
+    print("| 操縦者 | 点↑ | regret↓ | 列誤差↓ | 軟着陸 | 着地 | 平均lat(s) | 判断回数 |")
+    print("|---|---|---|---|---|---|---|---|")
+    for k, s_, g, e, so, la, l_, d in rows:
+        print(f"| {k} | {s_:.0f} | {g if g is None else f'{g:.3f}'} | "
+              f"{e if e is None else f'{e:.2f}'} | {so}/{len(seeds)} | {la}/{len(seeds)} | "
+              f"{l_:.3f} | {d:.1f} |")
+    if a.out:
+        os.makedirs(a.out, exist_ok=True)
+        with open(os.path.join(a.out, "flight_bench.md"), "w", encoding="utf-8") as f:
+            f.write(f"# パラシュート降下 比較 (seeds={seeds}, 風={cfg.wind}±{cfg.gust})\n\n")
+            f.write("| 操縦者 | 点↑ | regret↓ | 列誤差↓ | 軟着陸 | 着地 | 平均lat(s) | 判断回数 |\n")
+            f.write("|---|---|---|---|---|---|---|---|\n")
+            for k, s_, g, e, so, la, l_, d in rows:
+                f.write(f"| {k} | {s_:.0f} | {g if g is None else f'{g:.3f}'} | "
+                        f"{e if e is None else f'{e:.2f}'} | {so}/{len(seeds)} | "
+                        f"{la}/{len(seeds)} | {l_:.3f} | {d:.1f} |\n")
+        print(f"\n出力: {a.out}/flight_bench.md", file=sys.stderr)
+    return 0
+
+
 def cmd_doctor(a: argparse.Namespace) -> int:
     print("--- 依存 ---")
     for m in ("numpy", "PIL", "httpx"):
@@ -490,6 +614,47 @@ def build_parser() -> argparse.ArgumentParser:
                    help="VLA (mock) の腕前も並べる。None にしたい場合は -1")
     cp.add_argument("--out", default="decisions.html")
     cp.set_defaults(func=cmd_compare)
+
+    def _fly_args(q):
+        q.add_argument("--width", type=int, default=10)
+        q.add_argument("--height", type=int, default=20)
+        q.add_argument("--wind", type=float, default=0.8)
+        q.add_argument("--gust", type=float, default=1.6)
+        q.add_argument("--fuel", type=int, default=60)
+        q.add_argument("--seed", type=int, default=0)
+        q.add_argument("--kind", default=None, help="ピース種類 (既定は seed で決定)")
+        q.add_argument("--cell-px", type=int, default=12)
+        q.add_argument("--decision-period", type=int, default=4,
+                       help="何 tick ごとに判断を求めるか (VLA 系は毎 tick)")
+        q.add_argument("--skill", type=float, default=0.8, help="vla-mock の腕前")
+        q.add_argument("--latency", type=float, default=1.4, help="vla-mock の中央値レイテンシ")
+        q.add_argument("--model", default="qwen2.5vl:3b")
+        q.add_argument("--host", default="http://localhost:11434")
+        q.add_argument("--num-predict", type=int, default=28)
+        q.add_argument("--lang", default="en", choices=["en", "ja"],
+                       help="VLM プロンプトの言語 (en が約5倍速い)")
+        q.add_argument("--checkpoint", default="checkpoints/smolvla_bc.pt")
+        q.add_argument("--device", default="auto")
+        q.add_argument("--vlm-every", type=int, default=20,
+                       help="階層型で上位 VLM に問い合わせる間隔 (tick)")
+
+    fl = sub.add_parser("fly", help="パラシュート降下デモ (入力と判断を表示)")
+    _fly_args(fl)
+    fl.add_argument("--pilot", default="pd", choices=list(PILOT_KINDS))
+    fl.add_argument("--realtime", action="store_true", help="実時間で待つ (観賞用)")
+    fl.add_argument("--log", default=None, help="JSONL 記録の出力先")
+    fl.add_argument("--svg", default=None, help="SVG アニメの出力先")
+    fl.add_argument("--html", default=None, help="入力+判断の HTML 出力先")
+    fl.add_argument("--svg-speed", type=float, default=1.0)
+    fl.add_argument("--dump-frames", default=None)
+    fl.set_defaults(func=cmd_fly)
+
+    fb = sub.add_parser("flybench", help="パラシュート降下の操縦者比較")
+    _fly_args(fb)
+    fb.add_argument("--pilots", default="pd,coast,random,vla-mock")
+    fb.add_argument("--seeds", type=int, default=8)
+    fb.add_argument("--out", default=None)
+    fb.set_defaults(func=cmd_flybench)
 
     d = sub.add_parser("doctor", help="環境チェック")
     d.add_argument("--host", default="http://localhost:11434")

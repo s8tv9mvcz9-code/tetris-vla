@@ -9,3 +9,6 @@ runs/
 frames/
 *.png
 !docs/*.png
+
+# SmolVLA のチェックポイント (数百 MB)。学習は scripts/train_smolvla.py で再現する
+checkpoints/

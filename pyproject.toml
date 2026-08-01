@@ -13,6 +13,8 @@ dependencies = ["numpy>=1.24", "pillow>=10.0", "httpx>=0.24"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# 真の VLA (SmolVLA) を使う場合のみ。torch を含むので既定では入れない
+smolvla = ["lerobot[smolvla]>=0.4"]
 
 [project.scripts]
 tetris-vla = "tetris_vla.cli:main"
@@ -22,3 +24,5 @@ packages = ["tetris_vla"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: 重みのダウンロードや MPS/GPU を要するテスト"]

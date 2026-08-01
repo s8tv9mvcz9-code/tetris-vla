@@ -37,6 +37,10 @@ HEADER_FG = (190, 190, 200)
 #: A2A モードで他ピースが「ここに収まる」と宣言した予定地 (ゴースト)。
 #: 空セルにしか描かないので、確定/落下ブロックのデコードとは干渉しない。
 GHOST = (72, 72, 96)
+#: パラシュート降下モードの軌跡と噴射炎。セル中心に載っても「空」として読まれる
+#: (未知色は空セル扱いなので、地形の読み取りを汚さない)。
+TRAIL = (120, 170, 210)
+FLAME = (255, 170, 60)
 
 #: 落下中ブロックの色 (kind id -> RGB)
 BASE: dict[int, tuple[int, int, int]] = {
@@ -155,6 +159,34 @@ def render(
                 if 0 <= r < H and 0 <= c < W:
                     x0, y0 = c * cw + 1, top + r * cw + 1
                     d.rectangle([x0, y0, x0 + cw - 2, y0 + cw - 2], outline=EGO_RING, width=2)
+    return img
+
+
+def render_terrain(board: np.ndarray, cfg: RenderConfig | None = None) -> Image.Image:
+    """確定地形だけを描いた下地。上に何を重ねても `decode().settled` は読める。
+
+    パラシュート降下モードのように「格子に乗らないもの」を重ねたいときの土台。
+    地形はセル中心に確実に色が乗るので、重ねた側が中心を隠さない限り読み取りは保たれる。
+    """
+    cfg = cfg or RenderConfig()
+    H, W = board.shape
+    cw = cfg.cell_px
+    img = Image.new("RGB", cfg.image_size(W, H), BG)
+    d = ImageDraw.Draw(img)
+    top = cfg.header_px
+    if cfg.grid_lines:
+        for c in range(W + 1):
+            x = min(c * cw, img.width - 1)
+            d.line([(x, top), (x, img.height - 1)], fill=GRID)
+        for r in range(H + 1):
+            y = min(top + r * cw, img.height - 1)
+            d.line([(0, y), (img.width - 1, y)], fill=GRID)
+    for r in range(H):
+        for c in range(W):
+            v = int(board[r, c])
+            if v:
+                x0, y0 = c * cw + 1, top + r * cw + 1
+                d.rectangle([x0, y0, x0 + cw - 2, y0 + cw - 2], fill=SETTLED[v])
     return img
 
 
