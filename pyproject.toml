@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tetris-vla"
+version = "0.1.0"
+description = "意思を持つテトロミノたち — ローカル VLA によるマルチエージェント・テトリス PoC"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["numpy>=1.24", "pillow>=10.0", "httpx>=0.24"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+tetris-vla = "tetris_vla.cli:main"
+
+[tool.setuptools]
+packages = ["tetris_vla"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
