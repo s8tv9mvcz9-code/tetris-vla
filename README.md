@@ -11,8 +11,18 @@
 git clone https://github.com/s8tv9mvcz9-code/tetris-vla && cd tetris-vla
 ```
 
+**Python 3.10 以上が必要。** macOS 標準の `python3` は 3.9 系のことがあるので確認する
+(3.9 だと install 時に `requires a different Python` で止まる):
+
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+python3 --version
+```
+
+3.10 未満なら Homebrew などで入れて、そのバイナリで venv を作る
+(`brew install python@3.11` → `python3.11 -m venv .venv`)。
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -U pip && .venv/bin/pip install -e ".[dev]"
 ```
 
 ```bash
@@ -23,7 +33,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 (レイテンシのゆらぎ / JSON 崩れ / 拒否 / 範囲外出力) を模した mock で、そのまま最後まで走る。
 実機で回す手順は [実機 (Ollama) で動かす](#実機-ollama-で動かす) に。
 
-必要なのは Python 3.10+ と numpy / Pillow / httpx だけ。
+依存は numpy / Pillow / httpx だけ (テストに pytest)。
 
 ---
 
