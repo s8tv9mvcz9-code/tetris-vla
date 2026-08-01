@@ -16,7 +16,7 @@
           "control": 1.0
         },
         "passed": true,
-        "mean_latency_s": 0.0026,
+        "mean_latency_s": 0.0025,
         "latency_budget_s": 2.4,
         "latency_ratio": 0.001,
         "mean_staleness": 0.0,
@@ -42,7 +42,7 @@
           "control": 0.967
         },
         "passed": true,
-        "mean_latency_s": 0.0025,
+        "mean_latency_s": 0.0026,
         "latency_budget_s": 2.0,
         "latency_ratio": 0.001,
         "mean_staleness": 0.05,
@@ -120,7 +120,7 @@
           "control": 0.503
         },
         "passed": false,
-        "mean_latency_s": 0.0024,
+        "mean_latency_s": 0.0025,
         "latency_budget_s": 0.4,
         "latency_ratio": 0.006,
         "mean_staleness": 2.47,
@@ -155,7 +155,7 @@
           "control": 1.0
         },
         "passed": true,
-        "mean_latency_s": 0.0025,
+        "mean_latency_s": 0.0026,
         "latency_budget_s": 2.4,
         "latency_ratio": 0.001,
         "mean_staleness": 0.0,
@@ -181,7 +181,7 @@
           "control": 1.0
         },
         "passed": true,
-        "mean_latency_s": 0.0025,
+        "mean_latency_s": 0.0027,
         "latency_budget_s": 2.0,
         "latency_ratio": 0.001,
         "mean_staleness": 0.03,
@@ -259,7 +259,7 @@
           "control": 0.421
         },
         "passed": false,
-        "mean_latency_s": 0.0024,
+        "mean_latency_s": 0.0025,
         "latency_budget_s": 0.4,
         "latency_ratio": 0.006,
         "mean_staleness": 2.17,
@@ -320,7 +320,7 @@
           "control": 0.967
         },
         "passed": true,
-        "mean_latency_s": 0.0048,
+        "mean_latency_s": 0.005,
         "latency_budget_s": 2.0,
         "latency_ratio": 0.002,
         "mean_staleness": 0.0,
@@ -346,7 +346,7 @@
           "control": 0.88
         },
         "passed": true,
-        "mean_latency_s": 0.0073,
+        "mean_latency_s": 0.0077,
         "latency_budget_s": 1.2,
         "latency_ratio": 0.006,
         "mean_staleness": 0.0,
@@ -372,7 +372,7 @@
           "control": 0.889
         },
         "passed": true,
-        "mean_latency_s": 0.0096,
+        "mean_latency_s": 0.0097,
         "latency_budget_s": 0.75,
         "latency_ratio": 0.013,
         "mean_staleness": 0.0,
@@ -398,7 +398,7 @@
           "control": 0.566
         },
         "passed": true,
-        "mean_latency_s": 0.0119,
+        "mean_latency_s": 0.0118,
         "latency_budget_s": 0.4,
         "latency_ratio": 0.03,
         "mean_staleness": 0.0,

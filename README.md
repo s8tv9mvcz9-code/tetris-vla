@@ -8,13 +8,22 @@
 ローカル VLA (Vision-Language-Action) をその「頭脳」に差せるようにしてある。
 
 ```bash
-cd tetris-vla
+git clone https://github.com/s8tv9mvcz9-code/tetris-vla && cd tetris-vla
+```
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+```
+
+```bash
 .venv/bin/python -m tetris_vla run --agent vla-mock --active 3 --ascii-every 40
 ```
 
-モデルのインストールは不要。既定のバックエンドはローカル VLM の挙動 (レイテンシのゆらぎ /
-JSON 崩れ / 拒否 / 範囲外出力) を模した mock で、そのまま最後まで走る。
+**モデルのインストールは不要。** 既定のバックエンドはローカル VLM の挙動
+(レイテンシのゆらぎ / JSON 崩れ / 拒否 / 範囲外出力) を模した mock で、そのまま最後まで走る。
 実機で回す手順は [実機 (Ollama) で動かす](#実機-ollama-で動かす) に。
+
+必要なのは Python 3.10+ と numpy / Pillow / httpx だけ。
 
 ---
 

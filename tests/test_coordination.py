@@ -356,6 +356,41 @@ def test_autonomous_agreement_with_the_reference_causes_conflicts() -> None:
     assert total_disagree > 0, "独裁は衝突回避のため参照から意図的にずれるはず"
 
 
+def test_every_documented_cli_command_parses_and_builds_its_agent() -> None:
+    """README に載っているコマンドが引数解析とエージェント構築を通ること。
+
+    サブコマンドごとに存在するフラグが違うので、_spec が別サブコマンド専用の
+    属性を触っていると実行時に落ちる (bench --agent vla-mock がこれで落ちた)。
+    """
+    from tetris_vla.cli import _spec, build_parser
+
+    parser = build_parser()
+    commands = [
+        "run --agent vla-mock --active 3",
+        "run --agent heuristic --mode a2a --active 3",
+        "run --agent dictator-heuristic --active 3",
+        "run --agent random",
+        "run --agent vla-ollama --model qwen2.5vl:3b",
+        "bench --agent heuristic --tier T2 --seeds 1",
+        "bench --agent vla-mock --tier T1 --modes autonomous,a2a,dictator",
+        "bench --agent dictator-vla-mock --tier T0",
+        "eval --seeds 1",
+        "ablate --study coordination --seeds 1",
+        "snapshot --out /tmp/x.png",
+        "compare --seed 1 --scenes 2",
+        "replay --log /tmp/x.jsonl",
+        "doctor",
+    ]
+    for cmd in commands:
+        args = parser.parse_args(cmd.split())
+        assert args.func is not None
+        if hasattr(args, "agent"):
+            spec = _spec(args)          # ここが AttributeError を出さないこと
+            assert spec.kind == args.agent
+            if "ollama" not in spec.kind:
+                assert spec.build(0) is not None
+
+
 def test_compare_html_is_self_contained() -> None:
     from tetris_vla.compare import capture_scenes, default_verdicts, to_html
 

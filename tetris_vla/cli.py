@@ -111,7 +111,8 @@ def _spec(a: argparse.Namespace) -> AgentSpec:
             "p_malformed": a.p_malformed,
             "p_refuse": a.p_refuse,
             "p_out_of_range": a.p_oob,
-            "sleep": a.realtime,
+            # --realtime は run サブコマンドにしかない
+            "sleep": getattr(a, "realtime", False),
             "text_board": a.text_board,
         }
     elif a.agent == "vla-ollama":
