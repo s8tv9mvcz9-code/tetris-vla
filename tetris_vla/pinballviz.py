@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import html
 import json
+import re
+import textwrap
 from typing import Sequence
 
 from .pinball import (
@@ -840,6 +842,213 @@ def demo_timeline_diagram(res: dict, width: int = 940) -> str:
     return "\n".join(o)
 
 
+# --------------------------------------------------------------------------
+# IEC 61131-3 構造化テキスト (ST) — ラダーが読みにくい所は FB として出す
+# --------------------------------------------------------------------------
+
+#: Python の条件式を ST の識別子に寄せるための対応表。
+#: **当たらなかった部分は Python のまま残る** ので、コードが変わったときに
+#: 「翻訳できていない」ことが画面上で見える (黙って嘘をつかない)。
+_ST_SUBST = [
+    (r"\bbits\.get\('([a-z_0-9]+)'\)", r"\1"),
+    (r'\bbits\.get\("([a-z_0-9]+)"\)', r"\1"),
+    (r"\bd\.failed_reason\b", "drone_failed"),
+    (r"\bnot d\.active\b", "drone_done"),
+    (r"\bd\.active\b", "drone_active"),
+    (r"\badvice is False\b", "NOT vlm_repair_ok"),
+    (r"\badvice is True\b", "vlm_repair_ok"),
+    (r"\bbroken\b", "jig_broken"),
+    (r"\bnot\s+", "NOT "),
+    (r"\band\b", "AND"),
+    (r"\bor\b", "OR"),
+]
+
+
+def _to_st_expr(py: str) -> str:
+    out = py
+    for pat, rep in _ST_SUBST:
+        out = re.sub(pat, rep, out)
+    return out
+
+
+def extract_seq_transitions() -> list[tuple[str, str, str, str]]:
+    """`Sequencer.step` の実装を AST で読んで遷移表を作る。
+
+    ハードコードした遷移表を別に持つと、コードを直したときに静かに嘘になる。
+    ソースから引くので、ラングやガードを変えれば ST 側も勝手に追随する。
+
+    returns: [(from_state, to_state, guard_st, reason), ...]
+    """
+    import ast
+    import inspect
+
+    from .pinball import Sequencer
+
+    src = textwrap.dedent(inspect.getsource(Sequencer.step))
+    tree = ast.parse(src)
+    fn = tree.body[0]
+
+    def states_of(test) -> list[str]:
+        """`self.state is SeqState.X` / `self.state in (X, Y)` を拾う。"""
+        if not isinstance(test, ast.Compare):
+            return []
+        names = []
+        for comp in test.comparators:
+            for node in ast.walk(comp):
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                        and node.value.id == "SeqState":
+                    names.append(node.attr)
+        return names
+
+    out: list[tuple[str, list[tuple[str, str, str, str]]]] = []
+
+    def target_of(body) -> tuple[str, str] | None:
+        """その節が最終的にどの状態へ遷移するか。"""
+        for node in body:
+            for c in ast.walk(node):
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) \
+                        and c.func.attr == "_to" and len(c.args) >= 3:
+                    tgt = [n.attr for n in ast.walk(c.args[1])
+                           if isinstance(n, ast.Attribute)]
+                    raw = (c.args[2].value if isinstance(c.args[2], ast.Constant)
+                           else ast.unparse(c.args[2]))
+                    # f 文字列の {…} は ST のコメントでは邪魔なので伏せる
+                    reason = re.sub(r"\{[^}]*\}", "N", str(raw)).strip("f'\" ")
+                    return (tgt[0] if tgt else "?", reason)
+        return None
+
+    def clauses_of(body) -> list[tuple[str, str, str, str]]:
+        """節を IF / ELSIF / ELSE / PLAIN として順序を保ったまま取り出す。
+
+        Python の if/elif/else は排他なので、**独立した IF に平坦化してはいけない**。
+        平坦化すると、たとえば PLAN 状態で 2 つの分岐が同時に成立してしまい、
+        生成した ST が元のロジックと違う動きをする。
+        """
+        cl: list[tuple[str, str, str, str]] = []
+        for node in body:
+            if not isinstance(node, ast.If):
+                t = target_of([node])
+                if t:
+                    cl.append(("PLAIN", "", t[0], t[1]))
+                continue
+            kind, n = "IF", node
+            while True:
+                t = target_of(n.body)
+                if t:
+                    cl.append((kind, _to_st_expr(ast.unparse(n.test)), t[0], t[1]))
+                kind = "ELSIF"
+                if len(n.orelse) == 1 and isinstance(n.orelse[0], ast.If):
+                    n = n.orelse[0]
+                    continue
+                if n.orelse:
+                    t = target_of(n.orelse)
+                    if t:
+                        cl.append(("ELSE", "", t[0], t[1]))
+                break
+        return cl
+
+    stack = [n for n in fn.body if isinstance(n, ast.If)]
+    while stack:
+        n = stack.pop(0)
+        for st in states_of(n.test):
+            out.append((st, clauses_of(n.body)))
+        for e in n.orelse:
+            if isinstance(e, ast.If):
+                stack.append(e)
+    return out
+
+
+def st_ladder_code(rungs: Sequence) -> str:
+    """ラダーの各ラングを ST の代入文に落とす。
+
+    PLC のスキャンは「上から順に評価してコイルへ書く」なので、ST では
+    そのまま上から順の代入になる。自己保持は `OR <coil>` で表現される。
+    """
+    coils = [r.coil for r in rungs]
+    inputs: list[str] = []
+    for r in rungs:
+        for b in (r.branches or []):
+            for c in b:
+                n = c.lstrip("!")
+                if n not in coils and n not in inputs:
+                    inputs.append(n)
+    L = ["FUNCTION_BLOCK FB_GateInterlock", "VAR_INPUT"]
+    L += [f"    {n:<16}: BOOL;" for n in inputs]
+    L += ["END_VAR", "VAR_OUTPUT"]
+    L += [f"    {c:<16}: BOOL;" for c in coils]
+    L += ["END_VAR", "", "(* PLC のスキャンと同じく上から順に評価する。",
+          "   上の行が書いたコイルを下の行が読めることに意味がある。 *)", ""]
+    for r in rungs:
+        expr = " OR ".join(
+            "(" + " AND ".join(("NOT " + c[1:]) if c.startswith("!") else c for c in br) + ")"
+            for br in (r.branches or [])) or "FALSE"
+        if r.seal:
+            expr += f" OR {r.coil}"          # 自己保持
+        L.append(f"    (* {r.name} — {r.comment} *)")
+        L.append(f"    {r.coil} := {expr};")
+        if r.seal:
+            L.append("    (* ↑ 末尾の OR が自己保持 (ラッチ) *)")
+        L.append("")
+    L.append("END_FUNCTION_BLOCK")
+    return "\n".join(L)
+
+
+def st_sequencer_code() -> str:
+    """シーケンサを ST の CASE 文として出す。遷移はソースから抽出したもの。"""
+    from .pinball import SeqState
+
+    ja = {s.name: s.value for s in SeqState}
+    by: dict[str, list[tuple[str, str, str, str]]] = {}
+    for frm, clauses in extract_seq_transitions():
+        by.setdefault(frm, []).extend(clauses)
+
+    L = ["FUNCTION_BLOCK FB_RepairSequencer",
+         "VAR_INPUT",
+         "    jig_broken      : BOOL;  (* 素通りのジグがある *)",
+         "    repair_permit   : BOOL;  (* ラダーが出す修理許可 *)",
+         "    repair_cancel   : BOOL;  (* ラダーが出す取消 *)",
+         "    vlm_repair_ok   : BOOL;  (* VLM の助言。命令ではない *)",
+         "    drone_done      : BOOL;",
+         "    drone_failed    : BOOL;",
+         "END_VAR",
+         "VAR",
+         "    state : E_SeqState := IDLE;",
+         "END_VAR", "",
+         "(* 安全に関わる判断はこの FB が持つ。VLM は助言するだけで",
+         "   拒否権はこちら側にある、という権限配置をコードで示す。 *)", "",
+         "CASE state OF"]
+    for s in SeqState:
+        rows = by.get(s.name, [])
+        L.append(f"    {s.name}:  (* {ja[s.name]} *)")
+        if not rows:
+            L.append("        ;  (* 遷移なし *)")
+        open_if = False
+        for kind, guard, to, reason in rows:
+            c = f"(* {reason} *)"
+            if kind == "IF":
+                if open_if:
+                    L.append("        END_IF;")
+                L.append(f"        IF {guard} THEN")
+                L.append(f"            state := {to};  {c}")
+                open_if = True
+            elif kind == "ELSIF":
+                L.append(f"        ELSIF {guard} THEN")
+                L.append(f"            state := {to};  {c}")
+            elif kind == "ELSE":
+                L.append("        ELSE")
+                L.append(f"            state := {to};  {c}")
+            else:
+                if open_if:
+                    L.append("        END_IF;")
+                    open_if = False
+                L.append(f"        state := {to};  {c}")
+        if open_if:
+            L.append("        END_IF;")
+        L.append("")
+    L += ["END_CASE;", "END_FUNCTION_BLOCK"]
+    return "\n".join(L)
+
+
 def pinball_html(res: dict, svg: str,
                  title: str = "産業制御 × Physical AI — ピンボール／ブロック崩し") -> str:
     sc = res["score"]
@@ -995,6 +1204,24 @@ def pinball_html(res: dict, svg: str,
     p.append("<p class='lede'>設計上のステートマシンに、この回で実際に通った回数を重ねた図です。"
              "暗いままの枠と細い矢印は「設計にはあるが今回は通らなかった」経路。</p>")
     p.append("<div style='overflow-x:auto'>" + seq_flow_diagram(res["seq_events"]) + "</div>")
+
+    # ST (IEC 61131-3)。ラダーで読みにくい所は FB として出す
+    p.append("<h2>同じものを構造化テキスト (ST) で</h2>")
+    p.append("<p class='lede'>ラダーは接点の直並列には向きますが、"
+             "状態遷移を読むには向きません。実務でも段取りは FB の ST で書くので、"
+             "同じ中身を IEC 61131-3 の書き方でも出します。"
+             "<b>この 2 つは手書きではなく実装から生成しています</b> — "
+             "ラダーは <code>build_ladder()</code> のラング定義から、"
+             "シーケンサは <code>Sequencer.step</code> の構文木から抽出しているので、"
+             "実装を直せばこの ST も追随します（ドキュメントだけ古くなることがない）。</p>")
+    p.append("<details open><summary>FB_RepairSequencer — 段取りのステートマシン</summary>"
+             f"<pre class='rung'>{html.escape(st_sequencer_code())}</pre></details>")
+    p.append("<details><summary>FB_GateInterlock — ラダーと同じ論理を ST で</summary>"
+             f"<pre class='rung'>{html.escape(st_ladder_code(rungs))}</pre></details>")
+    p.append("<p class='lede' style='font-size:.76rem'>"
+             "ST 側の <code>IF / ELSIF / ELSE</code> は Python の分岐と 1 対 1 に対応させて"
+             "あります。独立した <code>IF</code> に並べ替えると排他性が壊れ、"
+             "PLAN 状態で 2 つの遷移が同時に成立してしまうためです。</p>")
     p.append("<p class='lede'>VLM は「今なら修理してよい」と<b>助言</b>するだけで、"
              "実際に救済機を出す/止めるの判断は必ずこのステートマシンを通ります。"
              "AI 連動でも安全側の権限は組み込みに残す、という形です。</p>")

@@ -415,3 +415,44 @@ def test_html_documents_every_ladder_rung() -> None:
     for r in build_ladder():
         assert r.name in doc, f"{r.name} が HTML に出ていない"
         assert r.comment in doc
+
+
+# --- ST (IEC 61131-3) の生成 ---------------------------------------------
+
+
+def test_st_is_generated_from_the_implementation_not_hardcoded() -> None:
+    """ST は手書きではなく実装から導出されている、という保証。
+
+    ハードコードした ST を置くと、ロジックを直したときに黙って嘘になる。
+    ここが落ちたら「実装は変わったのに ST が追随していない」ということ。
+    """
+    from tetris_vla.pinball import SeqState, build_ladder
+    from tetris_vla.pinballviz import (extract_seq_transitions, st_ladder_code,
+                                       st_sequencer_code)
+
+    trans = extract_seq_transitions()
+    covered = {frm for frm, _ in trans}
+    # step() が扱っている状態はすべて抽出できていること
+    assert {"IDLE", "RUN", "FAULT", "PLAN", "DISPATCH", "REPAIR"} <= covered
+
+    st = st_sequencer_code()
+    for s in SeqState:
+        assert f"{s.name}:" in st, s.name
+    # 排他性: PLAN の分岐は IF/ELSIF/ELSE で繋がっていなければならない
+    plan = st.split("PLAN:")[1].split("DISPATCH:")[0]
+    opens = [ln for ln in plan.splitlines() if ln.strip().startswith("IF ")]
+    assert "ELSIF" in plan and len(opens) == 1, (
+        "分岐が独立した IF に平坦化されている。排他性が壊れ、"
+        "PLAN で 2 つの遷移が同時に成立してしまう")
+
+    # Python の実装詳細が翻訳されずに漏れていないこと
+    for leak in ("self.", "bits.get", "SeqState.", "d.active", "elif"):
+        assert leak not in st, leak
+
+    lad = st_ladder_code(build_ladder())
+    assert "FUNCTION_BLOCK FB_GateInterlock" in lad and "END_FUNCTION_BLOCK" in lad
+    for r in build_ladder():
+        assert f"{r.coil} :=" in lad, r.coil
+    # 自己保持は末尾の OR で表現される
+    seal = [r for r in build_ladder() if r.seal][0]
+    assert f"OR {seal.coil};" in lad
