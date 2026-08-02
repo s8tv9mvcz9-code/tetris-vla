@@ -36,9 +36,9 @@ def main() -> int:
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--seed", type=int, default=3)
     ap.add_argument("--chunk", type=int, default=25)
-    ap.add_argument("--vlm-every", type=int, default=150)
+    ap.add_argument("--vlm-every", type=int, default=60)
     ap.add_argument("--slowmo", type=float, default=1.0)
-    ap.add_argument("--max-ticks", type=int, default=3000)
+    ap.add_argument("--max-ticks", type=int, default=5000)
     ap.add_argument("--skill", type=float, default=0.9)
     ap.add_argument("--out", default="results/pinball")
     a = ap.parse_args()
@@ -49,7 +49,7 @@ def main() -> int:
     if a.paddle == "mock":
         paddle = MockVLAPaddle(chunk=a.chunk, skill=a.skill)
     elif a.paddle == "scripted":
-        paddle = _ChunkedScripted(a.chunk)
+        paddle = _ChunkedScripted(a.chunk)   # 解析解 (弾道外挿 + 狙いの逆算)
     else:
         from tetris_vla.pinball_agents import SmolVLAPaddle
         paddle = SmolVLAPaddle(checkpoint=a.checkpoint, chunk=a.chunk)

@@ -236,12 +236,13 @@ class ScriptedPaddle:
     name = "scripted"
     layer = "vla"
 
-    def __init__(self, kp: float = 0.75, bang_bang: bool = True,
+    def __init__(self, kp: float = 0.75, bang_bang: bool = False,
                  deadband: float = 0.25) -> None:
         self.kp = kp
-        #: 指令を {-1, 0, +1} に量子化する。実測で連続版は 55% が飽和しており、
-        #: 実質バンバン制御だった。中間値を残すと BC が平均へ回帰して振幅が半減し
-        #: (実測 0.636 -> 0.312)、パドルが届かなくなる。分布を素直にしておく。
+        #: 指令を {-1, 0, +1} に量子化する。**BC の教師データ生成専用**。
+        #: 連続版のほうが制御としては強い (実測 858 vs 763) ので既定は False。
+        #: ただし連続版は BC すると平均へ回帰して振幅が半減し (0.636 -> 0.312)
+        #: パドルが届かなくなるため、模倣させるときだけ量子化する。
         self.bang_bang = bang_bang
         self.deadband = deadband
 
@@ -679,7 +680,8 @@ def collect_pinball_expert(n_episodes: int = 24, chunk: int = 25, stride: int = 
     """
     from .smolvla_pilot import BCSample
 
-    teacher = ScriptedPaddle()
+    # 教師データ生成のときだけバンバンにする (分布を素直にして模倣しやすくする)
+    teacher = ScriptedPaddle(bang_bang=True)
     strat = HeuristicStrategist()
     out = []
     for ep in range(n_episodes):

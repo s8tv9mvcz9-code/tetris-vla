@@ -25,6 +25,7 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--max-seconds", type=float, default=1200)
     ap.add_argument("--out", default="checkpoints/smolvla_pinball.pt")
+    ap.add_argument("--bang-bang", type=int, default=1)
     a = ap.parse_args()
 
     log = lambda m: print(m, flush=True)
