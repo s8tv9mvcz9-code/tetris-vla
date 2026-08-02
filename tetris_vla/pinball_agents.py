@@ -308,6 +308,7 @@ class SmolVLAPaddle:
     layer = "vla"
 
     def __init__(self, checkpoint: str | None = None, device: str = "auto",
+                 seed: int = 0,
                  chunk: int = 25) -> None:
         import torch
 
@@ -321,6 +322,7 @@ class SmolVLAPaddle:
             self.policy.to(torch.device(pick_device(dev)))
         self.policy.eval()
         self.chunk = chunk
+        self.seed = seed
         self._torch = torch
         self.name = "smolvla" + ("-bc" if checkpoint else "-zeroshot")
 
@@ -359,9 +361,21 @@ class SmolVLAPaddle:
         ], dtype=np.float32)
 
     def plan(self, w: PinballWorld, target_seg: int | None) -> tuple[list[float], float, dict]:
+        """行動列を 1 回ぶん出す。
+
+        **この層だけが再現しない。** 同じ seed・同じ盤面で 2 回走らせても
+        結果が変わる (実測 691.7 / 668.8)。推論のたびに種を固定しても揃わない
+        (925.0 / 802.1) ので、原因はサンプリングだけではなく演算自体にある。
+
+        ラダー・シーケンサ・解析解パドルは同じ入力なら必ず同じ出力になる。
+        **決定性は下位層の性質で、学習層はそれを持たない。**
+        比較するときは 1 回の走行を信じず、seed を増やして分布で見ること
+        (この層の行だけ ±σ が大きいのはそのため)。
+        """
         from .smolvla_pilot import image_to_tensor
 
         torch = self._torch
+        torch.manual_seed(self.seed + w.tick)
         img = render_pinball(w, target_seg=target_seg)
         task = pinball_task(target_seg)   # 学習時と同じ文にすること
         batch = {"observation.state": torch.from_numpy(self.encode_state(w, target_seg)),

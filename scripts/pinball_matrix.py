@@ -86,7 +86,8 @@ def main() -> int:
         f"{r['even']:.2f} | {r['hits']:.1f} | {r['lost']:.1f} | "
         f"{r['rep_ok']}/{r['rep_ng']} |\n" for r in out)
     md = (f"# パドル制御層の差し替え比較\n\n"
-          f"- seeds: {seeds} / 1面 {a.ticks} tick / 戦略層=ヒューリスティック固定\n"
+          f"- **学習モデルの行は走行ごとに変わる** (同じ seed でも再現しない)。1 回の数字ではなく ±σ で見ること\n"
+        "- seeds: {seeds} / 1面 {a.ticks} tick / 戦略層=ヒューリスティック固定\n"
           f"- 上位の指令周期: {a.vlm_every} tick "
           f"(これを伸ばすと腕前の差は消える — 別表参照)\n\n" + hdr + body)
     print()
