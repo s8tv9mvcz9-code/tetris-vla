@@ -38,7 +38,7 @@ from tetris_vla.pinball_agents import (
 )
 
 
-def _stack(seed=3, ticks=2200, skill=0.9):
+def _stack(seed=3, ticks=5000, skill=0.9):
     w = PinballWorld(PinballConfig(seed=seed, max_ticks=ticks))
     res = run_stack(w, MockVLAPaddle(skill=skill), HeuristicStrategist(),
                     StackConfig(vlm_every=150, verbose=False))
@@ -169,15 +169,53 @@ def test_hitting_a_segment_breaks_that_column_only() -> None:
     assert w.broken_per_col[seg] == 1
 
 
-def test_ball_on_paddle_breaks_the_matching_column() -> None:
+def test_hitting_jig_j_breaks_column_j() -> None:
+    """**ジグ j を叩く = 工程 j を 1 回こなす** → 列 j が 1 個崩れる。"""
+    w = PinballWorld(PinballConfig(seed=1))
+    j = w.jigs[3]
+    before = int(w.blocks[:, 3].sum())
+    b = Ball(x=j.x, y=j.y - j.r - 0.2, vx=0.0, vy=6.0)
+    w.balls = [b]
+    w._bounce_jigs(b)
+    assert int(w.blocks[:, 3].sum()) == before - 1
+    assert w.broken_per_col[3] == 1
+    assert j.hits == 1 and j.durability == j.max_durability - 1 or j.durability >= 0
+
+
+def test_paddle_returns_the_ball_but_breaks_nothing() -> None:
+    """パドルは返球と狙いだけ。崩すのはジグ側の仕事。"""
     w = PinballWorld(PinballConfig(seed=1))
     p = w.paddle
-    seg = 4
-    b = Ball(x=p.segment_center(seg), y=PADDLE_Y - 0.1, vx=0.0, vy=5.0)
+    b = Ball(x=p.x, y=PADDLE_Y - 0.1, vx=0.0, vy=5.0)
     w.balls = [b]
     w._paddle_and_blocks(b)
-    assert w.broken_per_col[seg] == 1
+    assert sum(w.broken_per_col) == 0, "パドルではブロックは崩れない"
     assert b.vy < 0, "跳ね返っていない"
+
+
+def test_paddle_hit_position_steers_the_ball() -> None:
+    """端で当てるほど大きく曲がる = どのジグへ返すかを狙える。"""
+    w = PinballWorld(PinballConfig(seed=1))
+    p = w.paddle
+    out = []
+    for off in (-0.9, 0.0, 0.9):
+        b = Ball(x=p.x + off * p.w / 2, y=PADDLE_Y - 0.1, vx=0.0, vy=5.0)
+        w.balls = [b]
+        w._paddle_and_blocks(b)
+        out.append(b.vx)
+    assert out[0] < out[1] < out[2]
+
+
+def test_a_broken_jig_stops_producing() -> None:
+    """摩耗して素通りになった工程はもう回せない (修理するまで)。"""
+    w = PinballWorld(PinballConfig(seed=1))
+    j = w.jigs[2]
+    j.broken = True
+    before = int(w.blocks[:, 2].sum())
+    b = Ball(x=j.x, y=j.y - j.r - 0.2, vx=0.0, vy=6.0)
+    w.balls = [b]
+    w._bounce_jigs(b)
+    assert int(w.blocks[:, 2].sum()) == before, "壊れたジグで工程が進んではいけない"
 
 
 def test_score_rewards_evenness() -> None:
@@ -281,11 +319,43 @@ def test_stack_is_deterministic() -> None:
     assert a == b
 
 
-def test_scripted_teacher_beats_a_clumsy_vla() -> None:
-    """腕が落ちると素直に成績が落ちる = 評価装置として機能している。"""
-    good = _stack(seed=3, skill=0.95)[1]["score"]["score"]
-    bad = _stack(seed=3, skill=0.2)[1]["score"]["score"]
-    assert good > bad, (good, bad)
+def _sweep(skill: float, every: int, n: int = 8) -> list[float]:
+    out = []
+    for s in range(n):
+        w = PinballWorld(PinballConfig(seed=s, max_ticks=5000))
+        r = run_stack(w, MockVLAPaddle(skill=skill, seed=s), HeuristicStrategist(),
+                      StackConfig(vlm_every=every, verbose=False))
+        out.append(r["score"]["score"])
+    return out
+
+
+def test_execution_precision_pays_off_only_when_the_goal_is_fresh() -> None:
+    """**精密な実行は、上位の指令が新鮮なときだけ価値がある。**
+
+    指令周期 60 tick (1.2秒) なら腕前の差がはっきり出るが、
+    150 tick (3秒) まで空くと差が消える。上位が古い目標を出している間は、
+    それを精密に追うこと自体に意味がなくなるため。
+    このプロジェクト全体の主題が、この題材でも再現している。
+    """
+    import statistics
+
+    fresh_good, fresh_bad = _sweep(0.95, 60), _sweep(0.2, 60)
+    stale_good, stale_bad = _sweep(0.95, 150), _sweep(0.2, 150)
+    fresh_gap = statistics.fmean(fresh_good) - statistics.fmean(fresh_bad)
+    stale_gap = statistics.fmean(stale_good) - statistics.fmean(stale_bad)
+    assert fresh_gap > 150, fresh_gap
+    assert stale_gap < fresh_gap / 2, (fresh_gap, stale_gap)
+
+
+def test_this_task_needs_many_seeds() -> None:
+    """ボールがカオス要素なので分散が大きい。1 seed 比較への歯止めとして仕様化する。
+
+    教材としては良いが、**計測器としては 10 seed 以上必要**。
+    """
+    import statistics
+
+    scores = _sweep(0.9, 60, n=8)
+    assert statistics.stdev(scores) > 0.15 * statistics.fmean(scores), scores
 
 
 def test_landing_prediction_is_sane() -> None:

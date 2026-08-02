@@ -18,14 +18,16 @@
 
 ## 盤面
 
-  * **ブロック** (上段): 6 列 x 4 段。**パドルのどのセグメントに当たったか**で
-    対応する列が 1 個崩れる。ボールを直接ブロックにぶつけるのではない。
-    「満遍なく削る」ほど高得点 (均等性ボーナス)。
-  * **ジグ** (中段): ピンボールのバンパー。ボールを弾く。
-    **耐久度は外から見えない。** 当たった回数だけがテレメトリとして見える。
-    耐久度が 0 になると素通り状態になり、そこで初めて故障が観測できる。
+  * **ジグ** (中段): 6 個。**ジグ j にボールが当たると列 j のブロックが 1 個崩れる。**
+    工程を 1 回こなす、というイメージ。満遍なくこなすほど高得点 (均等性ボーナス)。
+    ただし **叩くたびにジグ自身が摩耗する**。耐久度は外から見えず、打数だけが観測できる。
+    耐久 0 で素通りになり、**その工程はもう回せなくなる** (修理するまで)。
+    「使う道具が減っていく」という緊張がゲームの中心。
+  * **ブロック** (上段): 6 列 x 4 段。ジグ j に対応。直接は触れない。
   * **ゲート**: ラダーロジックが開閉する。開いていればボールが落ちる。
   * **パドル** (下段): 1 自由度 (左右のみ)。VLA が動かす。自由度を削って検証を簡単にしてある。
+    当たった位置で反射角が変わるので、**どのジグへ返すかを狙える**。
+  * **ボール**: 既定 2 個。カオス要素であり、同時に「並行して回る工程」でもある。
   * **救済機**: シーケンサが故障ジグへ飛ばす修理ドローン。
     ボール・パドル・健全なジグに触れたら修理失敗。
 
@@ -52,13 +54,14 @@ import numpy as np
 
 FIELD_W = 24.0
 FIELD_H = 32.0
-N_SEG = 6                 # パドルのセグメント数 = ブロックの列数
+N_SEG = 6                 # ジグの数 = ブロックの列数
 BLOCK_ROWS = 4
 BLOCK_TOP = 2.0
 BLOCK_H = 1.4
 PADDLE_Y = 29.0
 PADDLE_W = 7.2
 BALL_R = 0.45
+AIM_GAIN = 7.0            # パドル端で当てたときに横速度へ乗る量 (狙いの強さ)
 DOCK = (1.5, 30.5)        # 救済機の待機位置
 
 
@@ -191,8 +194,10 @@ class LadderPLC:
             self.bits[r.coil] = v
         self.scan_count += 1
         if keep_trace:
+            # ドラレコ用。入力接点も一緒に残さないと「なぜコイルが立ったか」を
+            # あとから追えない
             self.trace.append({"scan": self.scan_count, "changed": fired,
-                               "coils": {r.coil: self.bits[r.coil] for r in self.rungs}})
+                               "coils": dict(self.bits)})
         return dict(self.bits)
 
 
@@ -334,12 +339,12 @@ class PinballConfig:
     gravity: float = 4.6
     ball_speed0: float = 10.0
     paddle_speed: float = 19.0    # パドルの最大速度 (1 自由度)
-    n_balls: int = 1
+    n_balls: int = 2              # カオス要素であり、並行して回る工程でもある
     n_lives: int = 4              # 落としても復帰する回数。面を長く保って修理劇を見せる
-    jig_durability: tuple[int, int] = (3, 6)   # 隠れ耐久度の範囲
+    jig_durability: tuple[int, int] = (4, 9)   # 隠れ耐久度の範囲
     stall_ticks: int = 220        # ラダーの滞留タイマ
     danger_y: float = 22.0        # これより下にボールがあると危険域
-    max_ticks: int = 2600
+    max_ticks: int = 6000
     seed: int = 0
 
 
@@ -368,13 +373,15 @@ class PinballWorld:
         self.paddle_hits = 0
         self.events: list[dict] = []
 
+    #: ジグの配置。**ジグ j が列 j に対応する** ので、数は N_SEG と一致させる。
+    JIG_SPOTS = [(4.0, 13.0), (9.0, 10.5), (14.0, 10.5), (20.0, 13.0),
+                 (7.0, 17.5), (17.0, 17.5)]
+
     def _make_jigs(self) -> list[Jig]:
         lo, hi = self.cfg.jig_durability
-        spots = [(6.0, 12.0), (12.0, 9.5), (18.0, 12.0), (9.0, 16.5), (15.0, 16.5)]
-        return [Jig(jid=i, x=x, y=y, r=1.15,
-                    durability=self.rng.randint(lo, hi),
-                    max_durability=hi)
-                for i, (x, y) in enumerate(spots)]
+        return [Jig(jid=i, x=x, y=y, r=1.1,
+                    durability=self.rng.randint(lo, hi), max_durability=hi)
+                for i, (x, y) in enumerate(self.JIG_SPOTS[:N_SEG])]
 
     # -- 観測 (外部に見せてよいもの) --------------------------------------
 
@@ -434,6 +441,8 @@ class PinballWorld:
                     b.x, b.y = j.x + nx * (j.r + BALL_R + 1e-3), j.y + ny * (j.r + BALL_R + 1e-3)
                     j.hits += 1
                     j.durability -= 1
+                    # **工程を 1 回こなす**: ジグ j に当たったら列 j が 1 個崩れる
+                    self._break_block(j.jid)
                     if j.durability <= 0 and not j.broken:
                         j.broken = True
                         self.events.append({"tick": self.tick, "kind": "jig_broken",
@@ -443,17 +452,16 @@ class PinballWorld:
         p = self.paddle
         if b.vy > 0 and PADDLE_Y - BALL_R <= b.y <= PADDLE_Y + 0.8:
             if p.left <= b.x <= p.left + p.w:
-                seg = p.segment_of(b.x)
                 b.y = PADDLE_Y - BALL_R
                 b.vy = -abs(b.vy)
-                # 当たった位置で反射角を変える (端ほど大きく曲がる)
+                # 当たった位置で反射角が変わる = **どのジグへ返すかを狙える**。
+                # パドル自体はブロックを崩さない (崩すのはジグ)
                 rel = (b.x - p.x) / (p.w / 2)
-                b.vx += rel * 5.0
+                b.vx += rel * AIM_GAIN
                 self.paddle_hits += 1
-                self._break_block(seg)
 
     def _break_block(self, seg: int) -> None:
-        """**パドルのどのセグメントに当たったか**で対応する列が 1 個崩れる。"""
+        """ジグ seg を 1 回叩いた = 工程を 1 回こなした → 列 seg が 1 個崩れる。"""
         col = self.blocks[:, seg]
         idx = np.nonzero(col)[0]
         if idx.size:
@@ -565,13 +573,19 @@ class PinballWorld:
         broken = int(BLOCK_ROWS * N_SEG - self.blocks.sum())
         per = self.broken_per_col
         evenness = (min(per) / max(per)) if max(per) > 0 else 0.0
+        jig_hits = [j.hits for j in self.jigs]
+        jig_even = (min(jig_hits) / max(jig_hits)) if max(jig_hits) > 0 else 0.0
         return {
             "lives_left": self.lives,
             "blocks_broken": broken,
             "blocks_total": BLOCK_ROWS * N_SEG,
             "per_col": list(per),
             "evenness": round(evenness, 3),
+            "jig_hits": jig_hits,
+            "jig_evenness": round(jig_even, 3),
+            "broken_jigs": sum(1 for j in self.jigs if j.broken),
             "paddle_hits": self.paddle_hits,
             "lost_balls": self.lost_balls,
-            "score": round(1000 * (0.6 * broken / (BLOCK_ROWS * N_SEG) + 0.4 * evenness), 1),
+            "score": round(1000 * (0.55 * broken / (BLOCK_ROWS * N_SEG)
+                                   + 0.30 * evenness + 0.15 * jig_even), 1),
         }

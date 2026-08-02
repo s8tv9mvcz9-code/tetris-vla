@@ -117,9 +117,11 @@ def render_pinball(w: PinballWorld, px_per_unit: int = 9, target_seg: int | None
     for s in range(1, N_SEG):
         sx, _ = P(p.left + s * p.w / N_SEG, 0)
         d.line([sx, y0, sx, y1], fill=SEG_LINE, width=1)
-    if target_seg is not None:
-        sx, _ = P(p.segment_center(target_seg), 0)
-        d.polygon([(sx - 4, y0 - 9), (sx + 4, y0 - 9), (sx, y0 - 2)], fill=TARGET_C)
+    if target_seg is not None and 0 <= target_seg < len(w.jigs):
+        # 狙うのはパドルの区画ではなく **ジグ** なので、印はジグの上に出す
+        tj = w.jigs[target_seg]
+        tx, ty = P(tj.x, tj.y - tj.r - 0.5)
+        d.polygon([(tx - 5, ty - 7), (tx + 5, ty - 7), (tx, ty)], fill=TARGET_C)
 
     # ボール
     for b in w.balls:
@@ -195,30 +197,74 @@ def predict_landing_x(w: PinballWorld) -> float | None:
     return x
 
 
-class ScriptedPaddle:
-    """教師。**着弾点が目標セグメントに来るように** パドル中心をずらす。
+def aim_offset(w: PinballWorld, land_x: float, vy_at_hit: float,
+               target_jig: int | None) -> float:
+    """目標ジグへ返すには、パドルのどこに当てればよいか (-1..+1 の相対位置)。
 
-    ブロックを直接狙うのではなく「パドルのどこに当てるか」を作る、という
-    この題材のルールがそのまま制御則になっている。
+    反射後 vx += rel * AIM_GAIN なので、必要な vx から rel を逆算する。
+    重力込みで「上昇してジグ高さに達するまでの時間」を解いてから横速度を決める。
+    壁反射は無視する近似 (それでも十分狙える)。
+    """
+    if target_jig is None or not (0 <= target_jig < len(w.jigs)):
+        return 0.0
+    j = w.jigs[target_jig]
+    g = w.cfg.gravity
+    v0 = abs(vy_at_hit)                    # 反射直後の上向き速度
+    rise = PADDLE_Y - j.y
+    if rise <= 0:
+        return 0.0
+    disc = v0 * v0 - 2 * g * rise
+    if disc < 0:                            # そもそも届かない高さ
+        t = v0 / max(1e-6, g)
+    else:
+        t = (v0 - math.sqrt(disc)) / max(1e-6, g)
+    t = max(0.08, t)
+    vx_need = (j.x - land_x) / t
+    cur_vx = next((b.vx for b in w.balls if b.alive), 0.0)
+    from tetris_vla.pinball import AIM_GAIN
+
+    return max(-1.0, min(1.0, (vx_need - cur_vx) / AIM_GAIN))
+
+
+class ScriptedPaddle:
+    """教師。**返球しつつ、目標ジグへ向くようにパドルの当て所を作る**。
+
+    ジグを叩くと工程が 1 回進む (対応する列が崩れる) ので、
+    「どのジグへ返すか」がそのまま生産計画の実行になっている。
     """
 
     name = "scripted"
     layer = "vla"
 
-    def __init__(self, kp: float = 0.55) -> None:
+    def __init__(self, kp: float = 0.75, bang_bang: bool = True,
+                 deadband: float = 0.25) -> None:
         self.kp = kp
+        #: 指令を {-1, 0, +1} に量子化する。実測で連続版は 55% が飽和しており、
+        #: 実質バンバン制御だった。中間値を残すと BC が平均へ回帰して振幅が半減し
+        #: (実測 0.636 -> 0.312)、パドルが届かなくなる。分布を素直にしておく。
+        self.bang_bang = bang_bang
+        self.deadband = deadband
 
     def __call__(self, w: PinballWorld, target_seg: int | None) -> tuple[float, dict]:
         land = predict_landing_x(w)
         if land is None:
             return 0.0, {"note": "ボールなし"}
-        seg = target_seg if target_seg is not None else N_SEG // 2
-        # 着弾点がセグメント中心に重なるようなパドル中心
-        want_center = land - (seg + 0.5 - N_SEG / 2) * (w.paddle.w / N_SEG)
+        alive = [b for b in w.balls if b.alive and b.vy > 0]
+        vy = max((b.vy for b in alive), default=8.0)
+        rel = aim_offset(w, land, vy, target_seg)
+        # 着弾点がパドル上の rel の位置に来るようなパドル中心
+        want_center = land - rel * (w.paddle.w / 2)
+        # パドルから外れるくらいなら狙いを捨てて返球を優先する
+        want_center = max(land - w.paddle.w / 2 * 0.92,
+                          min(land + w.paddle.w / 2 * 0.92, want_center))
         err = want_center - w.paddle.x
-        return max(-1.0, min(1.0, self.kp * err)), {
-            "landing_x": round(land, 2), "want_center": round(want_center, 2),
-            "err": round(err, 2), "target_seg": seg}
+        cmd = max(-1.0, min(1.0, self.kp * err))
+        if self.bang_bang:
+            cmd = 0.0 if abs(err) < self.deadband else (1.0 if err > 0 else -1.0)
+        return cmd, {
+            "landing_x": round(land, 2), "aim_rel": round(rel, 2),
+            "want_center": round(want_center, 2), "err": round(err, 2),
+            "target_jig": target_seg, "bang_bang": self.bang_bang}
 
 
 class MockVLAPaddle:
@@ -272,16 +318,25 @@ class SmolVLAPaddle:
 
     @staticmethod
     def encode_state(w: PinballWorld, target_seg: int | None) -> np.ndarray:
+        """6 次元。最後が **目標ジグの位置** (上位からの指令)。
+
+        「そこへ返すにはパドルのどこに当てればよいか」の弾道計算は渡さない。
+        そこを学習させたいので、教師の中間結果は入力に入れない。
+        降りてくるボールは **最初に着弾するもの** を基準にする (2 個あるため)。
+        """
         alive = [b for b in w.balls if b.alive]
-        b = alive[0] if alive else None
-        tgt_x = w.paddle.segment_center(target_seg) if target_seg is not None else w.paddle.x
+        # 先に降りてくる (= 先に捌かねばならない) ボールを主対象にする
+        b = min(alive, key=lambda z: (PADDLE_Y - z.y) / max(0.1, z.vy) if z.vy > 0 else 1e9,
+                default=None) if alive else None
+        tgt_x = w.jigs[target_seg].x if target_seg is not None and 0 <= target_seg < len(w.jigs) \
+            else w.paddle.x
         return np.array([
             w.paddle.x / FIELD_W * 2 - 1,
             (b.x / FIELD_W * 2 - 1) if b else 0.0,
             (b.y / FIELD_H * 2 - 1) if b else 1.0,
             (b.vx / 20.0) if b else 0.0,
             (b.vy / 20.0) if b else 0.0,
-            max(-1.0, min(1.0, (tgt_x - w.paddle.x) / (FIELD_W / 2))),
+            tgt_x / FIELD_W * 2 - 1,
         ], dtype=np.float32)
 
     def plan(self, w: PinballWorld, target_seg: int | None) -> tuple[list[float], float, dict]:
@@ -289,8 +344,7 @@ class SmolVLAPaddle:
 
         torch = self._torch
         img = render_pinball(w, target_seg=target_seg)
-        task = (f"move the paddle so the ball lands on segment {target_seg}"
-                if target_seg is not None else "keep the ball in play")
+        task = pinball_task(target_seg)   # 学習時と同じ文にすること
         batch = {"observation.state": torch.from_numpy(self.encode_state(w, target_seg)),
                  "observation.images.camera1": image_to_tensor(img),
                  "task": task}
@@ -419,14 +473,19 @@ class HeuristicStrategist:
 
     def __call__(self, w: PinballWorld) -> tuple[dict, float, str, str, str | None]:
         t0 = time.perf_counter()
-        # 均等に削るのが目的なので「まだ残っていて、かつ最も削れていない列」を狙う。
-        # 単純な argmax だと同数のとき常に左端を選び、偏りが直らない
+        # 均等にこなすのが目的なので「まだ残っていて、健全で、最もこなしていない工程」を狙う。
+        # 壊れたジグはもう回せないので候補から外す (修理はシーケンサの仕事)
         left = [int(w.blocks[:, c].sum()) for c in range(N_SEG)]
-        cand = [c for c in range(N_SEG) if left[c] > 0]
-        seg = min(cand, key=lambda c: (w.broken_per_col[c], -left[c])) if cand else 0
+        cand = [c for c in range(N_SEG) if left[c] > 0 and not w.jigs[c].broken]
+        if cand:
+            seg = min(cand, key=lambda c: (w.broken_per_col[c], -left[c]))
+            why = "未消化かつ健全な工程"
+        else:
+            seg = next((c for c in range(N_SEG) if left[c] > 0), 0)
+            why = "健全な工程がない"
         alive = [b for b in w.balls if b.alive]
         safe = not any(b.y > w.cfg.danger_y for b in alive)
-        return ({"target_seg": seg, "repair_ok": safe, "why": "残数最多の列"},
+        return ({"target_seg": seg, "repair_ok": safe, "why": why},
                 time.perf_counter() - t0, "(内蔵ヒューリスティック)",
                 json.dumps({"target_seg": seg, "repair_ok": safe}), None)
 
@@ -543,6 +602,7 @@ def run_stack(
 
     return {
         "score": sc,
+        "ladder_trace": _compact_trace(plc, world.cfg.dt),
         "calls": [asdict(c) for c in calls],
         "frames": frames,
         "seq_events": [asdict(e) for e in seq.events],
@@ -555,13 +615,32 @@ def run_stack(
     }
 
 
+def _compact_trace(plc: LadderPLC, dt: float) -> dict:
+    """ドラレコ用にラダーのビット履歴を圧縮する。
+
+    信号ごとに "0101..." の 1 文字/スキャンで持つ。2000 スキャン x 十数信号でも数十 KB。
+    タイムチャート (PLC 屋が見慣れた縦=信号 / 横=時間 の図) をそのまま描ける。
+    """
+    if not plc.trace:
+        return {"signals": {}, "scans": 0, "dt": dt}
+    coils = [r.coil for r in plc.rungs]                       # ラングが書く出力
+    allbits = sorted({k for fr in plc.trace for k in fr["coils"]})
+    inputs = [k for k in allbits if k not in coils]            # 外から入る接点
+    names = [k for k in coils if k in allbits]
+    sig: dict[str, str] = {}
+    for n in inputs + names:
+        sig[n] = "".join("1" if fr["coils"].get(n) else "0" for fr in plc.trace)
+    return {"signals": sig, "scans": len(plc.trace), "dt": dt,
+            "coils": names, "inputs": inputs}
+
+
 def _advance(world: PinballWorld, plc: LadderPLC, seq: Sequencer,
              queue: list[float], n_ticks: int, frames: list[dict]) -> None:
     """n tick 進める。ラダーとシーケンサは **毎 tick** 回る (ここが速い層)。"""
     for _ in range(max(0, n_ticks)):
         if world.done:
             return
-        bits = plc.scan(world.ladder_inputs())
+        bits = plc.scan(world.ladder_inputs(), keep_trace=True)
         seq.step(world.tick, world, bits)
         cmd = queue.pop(0) if queue else 0.0
         world.step(cmd, bits)
@@ -577,3 +656,60 @@ def _advance(world: PinballWorld, plc: LadderPLC, seq: Sequencer,
                       int(world.drone.active)],
             "state": seq.state.value,
         })
+
+
+# --------------------------------------------------------------------------
+# ピンボール用の behavior cloning
+# --------------------------------------------------------------------------
+
+
+def pinball_task(target_seg) -> str:
+    """VLA に渡す指示文。上位 (VLM) の判断がここに言語として入る。"""
+    if target_seg is None:
+        return "return the balls with the paddle and keep them in play"
+    return f"bounce the ball off the paddle toward bumper {int(target_seg)}"
+
+
+def collect_pinball_expert(n_episodes: int = 24, chunk: int = 25, stride: int = 2,
+                           seed0: int = 500, max_ticks: int = 2200, progress=None):
+    """ScriptedPaddle を教師に (画像, state6, 行動列) を集める。
+
+    上位の目標セグメントは HeuristicStrategist が与える。**学習後にその指令元を
+    VLM へ差し替えられる** ようにするため、目標は必ず state と指示文の両方に入れる。
+    """
+    from .smolvla_pilot import BCSample
+
+    teacher = ScriptedPaddle()
+    strat = HeuristicStrategist()
+    out = []
+    for ep in range(n_episodes):
+        w = PinballWorld(PinballConfig(seed=seed0 + ep, max_ticks=max_ticks))
+        plc = LadderPLC(build_ladder())
+        seq = Sequencer()
+        obs_seq, act_seq = [], []
+        target = None
+        while not w.done:
+            if w.tick % 150 == 0:
+                target = strat(w)[0].get("target_seg")
+            bits = plc.scan(w.ladder_inputs())
+            seq.step(w.tick, w, bits)
+            cmd, _ = teacher(w, target)
+            obs_seq.append((SmolVLAPaddle.encode_state(w, target),
+                            np.asarray(render_pinball(w, target_seg=target).convert("RGB"),
+                                       dtype=np.uint8), target))
+            v = np.zeros(6, dtype=np.float32)
+            v[0] = cmd
+            act_seq.append(v)
+            w.step(cmd, bits)
+        if not act_seq:
+            continue
+        pad = act_seq[-1]
+        for i in range(0, len(obs_seq), stride):
+            fut = act_seq[i:i + chunk]
+            if len(fut) < chunk:
+                fut = fut + [pad] * (chunk - len(fut))
+            st, im, tg = obs_seq[i]
+            out.append(BCSample(state=st, image=im, actions=np.stack(fut), target=tg))
+        if progress:
+            progress(f"  収集 ep{ep+1}/{n_episodes} 累計 {len(out)} サンプル")
+    return out

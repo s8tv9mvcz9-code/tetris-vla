@@ -1,0 +1,68 @@
+[
+  {
+    "label": "scripted(解析解)",
+    "sd": 178.21959270019173,
+    "score": 782.5899999999999,
+    "broken": 21.9,
+    "even": 0.775,
+    "hits": 12.3,
+    "lost": 3.7,
+    "rep_ok": 8,
+    "rep_ng": 8
+  },
+  {
+    "label": "SmolVLA (BC後)",
+    "sd": 182.69447020762408,
+    "score": 248.75,
+    "broken": 9.6,
+    "even": 0.075,
+    "hits": 1.4,
+    "lost": 5.0,
+    "rep_ok": 0,
+    "rep_ng": 4
+  },
+  {
+    "label": "mock-VLA skill=0.9",
+    "sd": 321.76697296162774,
+    "score": 639.6600000000001,
+    "broken": 18.4,
+    "even": 0.6,
+    "hits": 13.6,
+    "lost": 3.5,
+    "rep_ok": 7,
+    "rep_ng": 6
+  },
+  {
+    "label": "mock-VLA skill=0.5",
+    "sd": 205.5039886068719,
+    "score": 756.36,
+    "broken": 22.1,
+    "even": 0.7,
+    "hits": 16.8,
+    "lost": 3.8,
+    "rep_ok": 12,
+    "rep_ng": 9
+  },
+  {
+    "label": "mock-VLA skill=0.0 (無作為)",
+    "sd": 229.66525495453885,
+    "score": 376.84000000000003,
+    "broken": 13.4,
+    "even": 0.175,
+    "hits": 4.2,
+    "lost": 5.0,
+    "rep_ok": 2,
+    "rep_ng": 5
+  },
+  {
+    "label": "SmolVLA (学習前)",
+    "sd": 239.0920101829698,
+    "score": 274.36,
+    "broken": 9.9,
+    "even": 0.125,
+    "hits": 1.5,
+    "lost": 5.0,
+    "rep_ok": 5,
+    "rep_ng": 2
+  }
+]

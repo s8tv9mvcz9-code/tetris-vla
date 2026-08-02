@@ -89,22 +89,25 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
               f'<animate attributeName="opacity" values="{_fmt(vals,0)}" keyTimes="{kt}" '
               f'dur="{dur:.2f}s" repeatCount="indefinite" calcMode="discrete"/></rect>')
 
-    # ジグ (打数で色が変わり、壊れると輪郭だけになる)
-    spots = [(6.0, 12.0), (12.0, 9.5), (18.0, 12.0), (9.0, 16.5), (15.0, 16.5)]
+    # ジグ (壊れると輪郭だけになる)。**ジグ j に当たると列 j が崩れる** ので、
+    # ブロックと同じ色で縁取って対応関係を見えるようにする
+    from .pinball import PinballWorld
+
+    spots = PinballWorld.JIG_SPOTS[:N_SEG]
     truth = {t["jid"]: t for t in res.get("jig_truth", [])}
     for jid, (jx, jy) in enumerate(spots):
         broken = [f["jigs"][jid][1] for f in frames]
-        a(f'<circle cx="{jx*px:.1f}" cy="{jy*px:.1f}" r="{1.15*px:.1f}" fill="#78c8ff" '
-          f'opacity="0"><animate attributeName="opacity" '
+        col = BLOCK_COLS[jid % len(BLOCK_COLS)]
+        a(f'<circle cx="{jx*px:.1f}" cy="{jy*px:.1f}" r="{1.1*px:.1f}" fill="#78c8ff" '
+          f'stroke="{col}" stroke-width="3" opacity="0"><animate attributeName="opacity" '
           f'values="{_fmt([0.0 if b else 1.0 for b in broken],0)}" keyTimes="{kt}" '
           f'dur="{dur:.2f}s" repeatCount="indefinite" calcMode="discrete"/></circle>')
-        a(f'<circle cx="{jx*px:.1f}" cy="{jy*px:.1f}" r="{1.15*px:.1f}" fill="none" '
+        a(f'<circle cx="{jx*px:.1f}" cy="{jy*px:.1f}" r="{1.1*px:.1f}" fill="none" '
           f'stroke="#6a6a78" stroke-width="2" stroke-dasharray="3 3" opacity="0">'
           f'<animate attributeName="opacity" values="{_fmt([1.0 if b else 0.0 for b in broken],0)}" '
           f'keyTimes="{kt}" dur="{dur:.2f}s" repeatCount="indefinite" calcMode="discrete"/></circle>')
-        mx = truth.get(jid, {}).get("max_durability", "?")
-        a(f'<text x="{jx*px:.1f}" y="{(jy+2.1)*px:.1f}" fill="{DIM}" font-size="9" '
-          f'text-anchor="middle">#{jid}</text>')
+        a(f'<text x="{jx*px:.1f}" y="{(jy+0.3)*px:.1f}" fill="#0b0b11" font-size="11" '
+          f'text-anchor="middle" font-weight="bold">{jid}</text>')
 
     # パドル (セグメント線つき)
     pw = PADDLE_W * px
@@ -114,18 +117,17 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
       f'keyTimes="{kt}" dur="{dur:.2f}s" repeatCount="indefinite"/>')
     a(f'<rect x="0" y="{(PADDLE_Y-0.3)*px:.1f}" width="{pw:.1f}" height="{0.6*px:.1f}" '
       f'fill="#64f0b4" rx="2"/>')
-    for s in range(1, N_SEG):
-        a(f'<line x1="{s*pw/N_SEG:.1f}" y1="{(PADDLE_Y-0.3)*px:.1f}" x2="{s*pw/N_SEG:.1f}" '
-          f'y2="{(PADDLE_Y+0.3)*px:.1f}" stroke="#1e5a46"/>')
     a('</g>')
 
-    # ボール
-    bx = [(f["balls"][0][0] * px if f["balls"] else -99) for f in frames]
-    by = [(f["balls"][0][1] * px if f["balls"] else -99) for f in frames]
-    a(f'<circle r="{BALL_R*px:.1f}" fill="#fff">'
-      f'<animate attributeName="cx" values="{_fmt(bx)}" keyTimes="{kt}" dur="{dur:.2f}s" '
-      f'repeatCount="indefinite"/><animate attributeName="cy" values="{_fmt(by)}" '
-      f'keyTimes="{kt}" dur="{dur:.2f}s" repeatCount="indefinite"/></circle>')
+    # ボール (複数)
+    nb = max((len(f["balls"]) for f in frames), default=0)
+    for k in range(nb):
+        bx = [(f["balls"][k][0] * px if len(f["balls"]) > k else -99) for f in frames]
+        by = [(f["balls"][k][1] * px if len(f["balls"]) > k else -99) for f in frames]
+        a(f'<circle r="{BALL_R*px:.1f}" fill="#fff" stroke="#9ad" stroke-width="1">'
+          f'<animate attributeName="cx" values="{_fmt(bx)}" keyTimes="{kt}" dur="{dur:.2f}s" '
+          f'repeatCount="indefinite"/><animate attributeName="cy" values="{_fmt(by)}" '
+          f'keyTimes="{kt}" dur="{dur:.2f}s" repeatCount="indefinite"/></circle>')
 
     # 救済機
     dx = [f["drone"][0] * px for f in frames]
@@ -205,6 +207,62 @@ code{font-size:.85em}
 """
 
 
+def ladder_timing_chart(trace: dict, width: int = 940, row_h: int = 17,
+                        max_scans: int = 1400) -> str:
+    """PLC 屋が見慣れたタイムチャート (縦=信号 / 横=スキャン) を SVG で描く。
+
+    ドラレコ用途。「なぜあの瞬間にコイルが立ったのか」を後から追えるように、
+    入力接点と出力コイルを同じ時間軸に並べる。
+    """
+    sig = trace.get("signals") or {}
+    if not sig:
+        return "<p class='lede'>ラダートレースがありません</p>"
+    n = trace["scans"]
+    step = max(1, n // max_scans)
+    inputs = trace.get("inputs", [])
+    coils = trace.get("coils", [])
+    order = [x for x in inputs if x in sig] + [x for x in coils if x in sig]
+    label_w = 150
+    plot_w = width - label_w - 10
+    cols = len(range(0, n, step))
+    px_per = plot_w / max(1, cols)
+    H = row_h * len(order) + 26
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>']
+    dt = trace.get("dt", 0.02)
+    for k in range(0, cols, max(1, cols // 8)):
+        x = label_w + k * px_per
+        o.append(f'<line x1="{x:.1f}" y1="16" x2="{x:.1f}" y2="{H-6}" stroke="#25252f"/>')
+        o.append(f'<text x="{x+2:.1f}" y="12" fill="#7a7a88" font-size="9">'
+                 f'{k*step*dt:.0f}s</text>')
+    for i, name in enumerate(order):
+        y = 22 + i * row_h
+        is_coil = name in coils
+        col = "#7ee787" if is_coil else "#5ac8fa"
+        o.append(f'<text x="4" y="{y+10}" fill="{col}" font-size="10">'
+                 f'{"◆" if is_coil else "○"} {html.escape(name)}</text>')
+        o.append(f'<line x1="{label_w}" y1="{y+row_h-2}" x2="{width-6}" y2="{y+row_h-2}" '
+                 f'stroke="#1c1c25"/>')
+        bits = sig[name]
+        run_start = None
+        for k, idx in enumerate(range(0, n, step)):
+            on = bits[idx] == "1"
+            if on and run_start is None:
+                run_start = k
+            elif not on and run_start is not None:
+                x0 = label_w + run_start * px_per
+                o.append(f'<rect x="{x0:.1f}" y="{y+2}" width="{max(0.6,(k-run_start)*px_per):.1f}" '
+                         f'height="{row_h-6}" fill="{col}" opacity="0.85"/>')
+                run_start = None
+        if run_start is not None:
+            x0 = label_w + run_start * px_per
+            o.append(f'<rect x="{x0:.1f}" y="{y+2}" width="{max(0.6,(cols-run_start)*px_per):.1f}" '
+                     f'height="{row_h-6}" fill="{col}" opacity="0.85"/>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
 def pinball_html(res: dict, svg: str,
                  title: str = "産業制御 × Physical AI — ピンボール／ブロック崩し") -> str:
     sc = res["score"]
@@ -216,8 +274,10 @@ def pinball_html(res: dict, svg: str,
         "<p class='lede'>同じ盤面の上で <b>4 つの制御層が別々のクロックで</b> 動いています。"
         "下ほど速く決定的、上ほど遅く賢い。上位の判断は必ず<b>古い盤面に対する答え</b>として"
         "降りてくるので、下位はそれを前提に動きます。"
-        "ジグ（バンパー）の<b>耐久度は隠れ状態</b>で、打数しか観測できません。"
-        "壊れて素通りになって初めて故障が分かり、シーケンサが救済機を出します。</p>")
+        "<b>ジグ（バンパー）に当てると対応する列が 1 個崩れます</b>（工程を 1 回こなす）。"
+        "ただし叩くたびにジグ自身が摩耗し、<b>耐久度は隠れ状態</b>で打数しか観測できません。"
+        "耐久が尽きると素通りになり<b>その工程はもう回せなくなる</b>ので、"
+        "シーケンサが救済機を出して直します。使う道具が減っていく、という緊張が中心です。</p>")
 
     p.append("<div class='layers'>")
     for key, name, clk, role in (
@@ -234,7 +294,9 @@ def pinball_html(res: dict, svg: str,
     rows = [
         ("崩したブロック", f"{sc['blocks_broken']}/{sc['blocks_total']}"),
         ("列ごとの内訳", str(sc["per_col"])),
-        ("均等性", f"{sc['evenness']}  (1.0 が理想)"),
+        ("均等性 (工程の消化)", f"{sc['evenness']}  (1.0 が理想)"),
+        ("ジグ打数 / 均等性", f"{sc.get('jig_hits')} / {sc.get('jig_evenness')}"),
+        ("摩耗して素通りになったジグ", sc.get("broken_jigs")),
         ("スコア", f"{sc['score']} / 1000"),
         ("パドル命中 / ロスト / 残機", f"{sc['paddle_hits']} / {sc['lost_balls']} / {sc['lives_left']}"),
         ("修理", f"成功 {res['repairs']['ok']} / 失敗 {res['repairs']['failed']}"),
@@ -273,6 +335,17 @@ def pinball_html(res: dict, svg: str,
                  f"<td class='rung'>{cond}</td><td class='rung'>{html.escape(r.coil)}</td>"
                  f"<td>{html.escape(r.comment)}</td></tr>")
     p.append("</table>")
+
+    # ラダーのタイムチャート (ドラレコ)
+    tr = res.get("ladder_trace") or {}
+    if tr.get("signals"):
+        p.append("<h2>ラダーのタイムチャート (ドラレコ)</h2>")
+        p.append(f"<p class='lede'>全 {tr['scans']} スキャンぶんのビット履歴。"
+                 "<span style='color:#5ac8fa'>○ 青 = 入力接点</span>、"
+                 "<span style='color:#7ee787'>◆ 緑 = 出力コイル</span>。"
+                 "帯が立っている区間がその信号 ON。"
+                 "「なぜあの瞬間に修理許可が出た/落ちたのか」を後から追えます。</p>")
+        p.append("<div style='overflow-x:auto'>" + ladder_timing_chart(tr) + "</div>")
 
     # シーケンサ
     p.append("<h2>シーケンサの遷移 (事故対応)</h2>")

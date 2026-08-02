@@ -354,6 +354,7 @@ def collect_expert(
 
 def train_bc(
     samples: Sequence[BCSample],
+    task_fn=None,
     steps: int = 300,
     batch_size: int = 4,
     lr: float = 1e-4,
@@ -394,7 +395,7 @@ def train_bc(
                 [image_from_uint8(samples[i].image) for i in idx]).to(dev_t),
             "action": torch.stack(
                 [torch.from_numpy(samples[i].actions) for i in idx]).to(dev_t),
-            "task": [task_for(samples[i].target) for i in idx],
+            "task": [(task_fn or task_for)(samples[i].target) for i in idx],
         }
         loss, _ = policy.forward(pre(batch))
         opt.zero_grad()
