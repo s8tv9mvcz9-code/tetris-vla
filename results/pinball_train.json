@@ -7,240 +7,240 @@
     "stride": 8,
     "lr": 0.0001,
     "max_seconds": 1500.0,
-    "out": "checkpoints/smolvla_pinball.pt",
+    "out": "checkpoints/smolvla_pinball_land.pt",
     "bang_bang": 1
   },
   "samples": 2130,
   "history": [
     {
       "step": 1,
-      "loss": 0.0497,
-      "elapsed_s": 1.7
+      "loss": 0.05548,
+      "elapsed_s": 1.5
     },
     {
       "step": 20,
-      "loss": 0.0657,
-      "elapsed_s": 17.0
+      "loss": 0.04573,
+      "elapsed_s": 16.6
     },
     {
       "step": 40,
-      "loss": 0.09838,
-      "elapsed_s": 33.0
+      "loss": 0.05793,
+      "elapsed_s": 32.5
     },
     {
       "step": 60,
-      "loss": 0.04973,
-      "elapsed_s": 49.1
+      "loss": 0.09455,
+      "elapsed_s": 48.5
     },
     {
       "step": 80,
-      "loss": 0.08962,
-      "elapsed_s": 65.3
+      "loss": 0.08031,
+      "elapsed_s": 64.5
     },
     {
       "step": 100,
-      "loss": 0.05419,
-      "elapsed_s": 81.5
+      "loss": 0.03197,
+      "elapsed_s": 80.4
     },
     {
       "step": 120,
-      "loss": 0.03084,
-      "elapsed_s": 97.5
+      "loss": 0.11886,
+      "elapsed_s": 96.4
     },
     {
       "step": 140,
-      "loss": 0.04089,
-      "elapsed_s": 113.5
+      "loss": 0.02481,
+      "elapsed_s": 112.3
     },
     {
       "step": 160,
-      "loss": 0.04781,
-      "elapsed_s": 129.5
+      "loss": 0.0369,
+      "elapsed_s": 128.4
     },
     {
       "step": 180,
-      "loss": 0.09214,
-      "elapsed_s": 145.4
+      "loss": 0.09478,
+      "elapsed_s": 144.3
     },
     {
       "step": 200,
-      "loss": 0.05744,
-      "elapsed_s": 161.6
+      "loss": 0.04259,
+      "elapsed_s": 160.3
     },
     {
       "step": 220,
-      "loss": 0.05951,
-      "elapsed_s": 177.7
+      "loss": 0.04983,
+      "elapsed_s": 176.3
     },
     {
       "step": 240,
-      "loss": 0.07207,
-      "elapsed_s": 193.7
+      "loss": 0.05603,
+      "elapsed_s": 192.3
     },
     {
       "step": 260,
-      "loss": 0.06496,
-      "elapsed_s": 209.7
+      "loss": 0.03371,
+      "elapsed_s": 208.4
     },
     {
       "step": 280,
-      "loss": 0.06009,
-      "elapsed_s": 225.7
+      "loss": 0.02972,
+      "elapsed_s": 224.4
     },
     {
       "step": 300,
-      "loss": 0.045,
-      "elapsed_s": 241.6
+      "loss": 0.02162,
+      "elapsed_s": 240.3
     },
     {
       "step": 320,
-      "loss": 0.0477,
-      "elapsed_s": 257.5
+      "loss": 0.04354,
+      "elapsed_s": 256.3
     },
     {
       "step": 340,
-      "loss": 0.07555,
-      "elapsed_s": 273.3
+      "loss": 0.03154,
+      "elapsed_s": 272.3
     },
     {
       "step": 360,
-      "loss": 0.03666,
-      "elapsed_s": 289.1
+      "loss": 0.04025,
+      "elapsed_s": 288.2
     },
     {
       "step": 380,
-      "loss": 0.09654,
-      "elapsed_s": 304.9
+      "loss": 0.02506,
+      "elapsed_s": 304.2
     },
     {
       "step": 400,
-      "loss": 0.04299,
-      "elapsed_s": 320.8
+      "loss": 0.03738,
+      "elapsed_s": 320.3
     },
     {
       "step": 420,
-      "loss": 0.06429,
-      "elapsed_s": 336.7
+      "loss": 0.12232,
+      "elapsed_s": 336.3
     },
     {
       "step": 440,
-      "loss": 0.03287,
-      "elapsed_s": 352.7
+      "loss": 0.03703,
+      "elapsed_s": 352.3
     },
     {
       "step": 460,
-      "loss": 0.05076,
-      "elapsed_s": 368.6
+      "loss": 0.08493,
+      "elapsed_s": 368.3
     },
     {
       "step": 480,
-      "loss": 0.02592,
-      "elapsed_s": 384.6
+      "loss": 0.06781,
+      "elapsed_s": 384.3
     },
     {
       "step": 500,
-      "loss": 0.20393,
-      "elapsed_s": 400.8
+      "loss": 0.05839,
+      "elapsed_s": 400.3
     },
     {
       "step": 520,
-      "loss": 0.03813,
-      "elapsed_s": 417.0
+      "loss": 0.04442,
+      "elapsed_s": 416.5
     },
     {
       "step": 540,
-      "loss": 0.0385,
-      "elapsed_s": 433.2
+      "loss": 0.35554,
+      "elapsed_s": 432.5
     },
     {
       "step": 560,
-      "loss": 0.04471,
-      "elapsed_s": 449.5
+      "loss": 0.04312,
+      "elapsed_s": 448.6
     },
     {
       "step": 580,
-      "loss": 0.04816,
-      "elapsed_s": 465.8
+      "loss": 0.06812,
+      "elapsed_s": 464.6
     },
     {
       "step": 600,
-      "loss": 0.04582,
-      "elapsed_s": 481.7
+      "loss": 0.03841,
+      "elapsed_s": 480.6
     },
     {
       "step": 620,
-      "loss": 0.03187,
-      "elapsed_s": 498.0
+      "loss": 0.08444,
+      "elapsed_s": 496.6
     },
     {
       "step": 640,
-      "loss": 0.03633,
-      "elapsed_s": 513.9
+      "loss": 0.0331,
+      "elapsed_s": 512.6
     },
     {
       "step": 660,
-      "loss": 0.03301,
-      "elapsed_s": 529.8
+      "loss": 0.10178,
+      "elapsed_s": 528.6
     },
     {
       "step": 680,
-      "loss": 0.0339,
-      "elapsed_s": 545.8
+      "loss": 0.05322,
+      "elapsed_s": 544.6
     },
     {
       "step": 700,
-      "loss": 0.0551,
-      "elapsed_s": 562.3
+      "loss": 0.05518,
+      "elapsed_s": 560.6
     },
     {
       "step": 720,
-      "loss": 0.10223,
-      "elapsed_s": 579.1
+      "loss": 0.05047,
+      "elapsed_s": 576.6
     },
     {
       "step": 740,
-      "loss": 0.0541,
-      "elapsed_s": 595.8
+      "loss": 0.04576,
+      "elapsed_s": 592.6
     },
     {
       "step": 760,
-      "loss": 0.03629,
-      "elapsed_s": 612.5
+      "loss": 0.03891,
+      "elapsed_s": 608.6
     },
     {
       "step": 780,
-      "loss": 0.02455,
-      "elapsed_s": 629.0
+      "loss": 0.06389,
+      "elapsed_s": 624.5
     },
     {
       "step": 800,
-      "loss": 0.05223,
-      "elapsed_s": 644.8
+      "loss": 0.02478,
+      "elapsed_s": 640.5
     },
     {
       "step": 820,
-      "loss": 0.03503,
-      "elapsed_s": 660.8
+      "loss": 0.04683,
+      "elapsed_s": 656.5
     },
     {
       "step": 840,
-      "loss": 0.0281,
-      "elapsed_s": 676.9
+      "loss": 0.04729,
+      "elapsed_s": 672.4
     },
     {
       "step": 860,
-      "loss": 0.05454,
-      "elapsed_s": 692.8
+      "loss": 0.02253,
+      "elapsed_s": 688.4
     },
     {
       "step": 880,
-      "loss": 0.06983,
-      "elapsed_s": 708.7
+      "loss": 0.08056,
+      "elapsed_s": 704.4
     },
     {
       "step": 900,
-      "loss": 0.04848,
-      "elapsed_s": 724.8
+      "loss": 0.14682,
+      "elapsed_s": 720.4
     }
   ]
 }
