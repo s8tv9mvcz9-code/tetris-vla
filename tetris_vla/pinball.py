@@ -85,11 +85,15 @@ class Jig:
     x: float
     y: float
     r: float
-    durability: int          # 隠れ状態。外部からは読めない
-    max_durability: int
-    hits: int = 0            # 観測できるテレメトリ (打数カウンタ)
+    durability: int          # 隠れ状態。外部からは読めない (残り何回打てるか)
+    max_durability: int      # 設定の上限。**全ジグ共通の公開値**であって真値ではない
+    hits: int = 0            # 観測できるテレメトリ (打数カウンタ。修理で 0 に戻る)
     broken: bool = False     # 耐久 0。素通りになるので結果として観測できる
     repairing: bool = False
+    #: この個体が「今の寿命で」打てる回数の真値。隠れ状態で、エージェントには渡さない。
+    #: 答え合わせ (jig_truth) 専用。max_durability を答えとして出すと全ジグ同じ定数に
+    #: なってしまい、「壊れて初めて答えが分かる」という主題そのものが消える。
+    initial_durability: int = 0
 
     def telemetry(self) -> dict:
         """外部 (シーケンサ / VLM / VLA) に見せてよい情報だけ。"""
@@ -342,7 +346,17 @@ class PinballConfig:
     n_balls: int = 2              # カオス要素であり、並行して回る工程でもある
     n_lives: int = 4              # 落としても復帰する回数。面を長く保って修理劇を見せる
     jig_durability: tuple[int, int] = (4, 9)   # 隠れ耐久度の範囲
-    stall_ticks: int = 220        # ラダーの滞留タイマ
+    #: 滞留タイマ。**「この tick 数だけ工程が進まなければ滞留」** と読む。
+    #:
+    #: 以前は「全球が y>=14 に居続けた tick 数」を数えて 220 (4.4秒) と比べていたが、
+    #: 全球が下段に居続ける最長は実測 108 スキャン (2.16秒) しかなく、しきい値が
+    #: 達成可能な最大値の 2 倍だった。結果 R2/R3 (ゲート開閉) は全走行を通じて
+    #: 一度も通電せず、6 本のラングのうち 2 本が死んでいた。
+    #:
+    #: しきい値ではなく述語の方が誤りだった。位置ではなく進捗 (ブロックが崩れたか)
+    #: で計るよう直したところ、ほぼ同じ 200 (4.0秒) で素直に動くようになった
+    #: — 3 seed 平均で 712 点 / ゲート開閉 8.3 回 (直す前は 0 回)。
+    stall_ticks: int = 200
     danger_y: float = 22.0        # これより下にボールがあると危険域
     max_ticks: int = 6000
     seed: int = 0
@@ -367,6 +381,8 @@ class PinballWorld:
         self.jigs = self._make_jigs()
         self.gates = [Gate(0, 7.0, 21.0, 4.0), Gate(1, 17.0, 21.0, 4.0)]
         self.stall = 0
+        #: 最後に工程が進んだ (ブロックが崩れた) tick。滞留判定の基準
+        self.last_progress_tick = 0
         self.alt = False
         self.lives = cfg.n_lives
         self.lost_balls = 0
@@ -379,9 +395,12 @@ class PinballWorld:
 
     def _make_jigs(self) -> list[Jig]:
         lo, hi = self.cfg.jig_durability
-        return [Jig(jid=i, x=x, y=y, r=1.1,
-                    durability=self.rng.randint(lo, hi), max_durability=hi)
-                for i, (x, y) in enumerate(self.JIG_SPOTS[:N_SEG])]
+        jigs = []
+        for i, (x, y) in enumerate(self.JIG_SPOTS[:N_SEG]):
+            d = self.rng.randint(lo, hi)      # 個体ごとの真の寿命。これが隠れ状態
+            jigs.append(Jig(jid=i, x=x, y=y, r=1.1, durability=d,
+                            max_durability=hi, initial_durability=d))
+        return jigs
 
     # -- 観測 (外部に見せてよいもの) --------------------------------------
 
@@ -408,7 +427,7 @@ class PinballWorld:
         return {
             "ball_upper": upper,
             "ball_lower": lower,
-            "stall_timer": self.stall >= self.cfg.stall_ticks,
+            "stall_timer": self.stall > 0,
             "alt_flag": self.alt,
             "drone_active": self.drone.active,
             "jig_broken": any(j.broken and not j.repairing for j in self.jigs),
@@ -467,6 +486,7 @@ class PinballWorld:
         if idx.size:
             self.blocks[idx[-1], seg] = False
             self.broken_per_col[seg] += 1
+            self.last_progress_tick = self.tick
             self.events.append({"tick": self.tick, "kind": "block", "seg": seg,
                                 "left": int(self.blocks[:, seg].sum())})
 
@@ -490,7 +510,9 @@ class PinballWorld:
         step = d.speed * self.cfg.dt
         if dist <= step:
             d.x, d.y = tgt.x, tgt.y
-            tgt.durability = tgt.max_durability
+            # 整備は「元の寿命に戻す」。設定上限まで回復させると、耐久 6 の個体が
+            # 修理後 9 になり、直すたびに新品より強くなってしまう
+            tgt.durability = tgt.initial_durability
             tgt.broken = False
             tgt.hits = 0
             d.active = False
@@ -555,7 +577,12 @@ class PinballWorld:
 
         self._drone()
         alive = [b for b in self.balls if b.alive]
-        self.stall = self.stall + 1 if alive and all(b.y >= 14.0 for b in alive) else 0
+        # 滞留タイマ。**位置ではなく「工程が進んでいないこと」で計る**。
+        # 以前は「全球が y>=14」という位置だけを見ていたので、下段で激しく跳ねて
+        # ジグを叩き続けていても滞留扱いになり、ゲートが工程中の球を落としていた。
+        # 産業ラインの滞留検知と同じく、見るべきは進捗が止まっていることの方。
+        stalled = bool(alive) and (self.tick - self.last_progress_tick) >= self.cfg.stall_ticks
+        self.stall = self.stall + 1 if stalled else 0
         if self.stall == 1:
             self.alt = not self.alt
         self.tick += 1

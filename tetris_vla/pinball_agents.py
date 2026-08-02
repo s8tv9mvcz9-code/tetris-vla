@@ -624,8 +624,10 @@ def run_stack(
         "ladder_scans": plc.scan_count,
         "repairs": {"ok": seq.repairs_ok, "failed": seq.repairs_failed},
         "world_events": world.events,
-        "jig_truth": [{"jid": j.jid, "max_durability": j.max_durability,
-                       "hits": j.hits, "broken": j.broken} for j in world.jigs],
+        # 答え合わせ。true_durability がこの個体の真値で、max_durability (設定上限) とは別物
+        "jig_truth": [{"jid": j.jid, "true_durability": j.initial_durability,
+                       "max_durability": j.max_durability, "hits": j.hits,
+                       "broken": j.broken} for j in world.jigs],
         "config": {**asdict(world.cfg), **asdict(scfg)},
     }
 

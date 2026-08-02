@@ -893,15 +893,29 @@ def pinball_html(res: dict, svg: str,
 
     truth = res.get("jig_truth", [])
     if truth:
-        p.append("<table style='margin-top:.7rem'><tr><th>ジグ</th><th>観測できた打数</th>"
-                 "<th>隠れ耐久度(答え)</th><th>状態</th></tr>")
+        p.append("<table style='margin-top:.7rem'><tr><th>ジグ</th>"
+                 "<th>観測できた打数</th><th>外から言えること</th>"
+                 "<th>真の寿命(答え)</th><th>状態</th></tr>")
         for t in truth:
-            p.append(f"<tr><td>#{t['jid']}</td><td>{t['hits']}</td>"
-                     f"<td>{t['max_durability']} 以下</td>"
+            true_d = t.get("true_durability")
+            if t["broken"]:
+                says = f"<b>{t['hits']}</b> 打で壊れた → 寿命が確定した"
+            else:
+                says = f"{t['hits']} 打でまだ無事 → 寿命は <b>{t['hits']} より大きい</b>としか言えない"
+            ans = (f"<b>{true_d}</b>" if t["broken"] else
+                   f"<span style='opacity:.45'>{true_d}</span>") if true_d else "—"
+            p.append(f"<tr><td>#{t['jid']}</td><td>{t['hits']}</td><td>{says}</td>"
+                     f"<td>{ans}</td>"
                      f"<td>{'素通り' if t['broken'] else '健全'}</td></tr>")
         p.append("</table>")
-        p.append("<p class='lede' style='font-size:.76rem'>打数は見えるが耐久度は見えない。"
-                 "「そろそろ壊れる」は推測するしかない。</p>")
+        p.append("<p class='lede' style='font-size:.76rem'>"
+                 "打数は見えるが、寿命は見えない。<b>壊れて初めて答えが分かる</b>"
+                 "（そのときには手遅れ）という非対称がこの題材の芯です。"
+                 "「真の寿命」列は答え合わせ用で、運転中の層には渡していません — "
+                 "薄い数字は<b>まだ本人にも分かっていない値</b>、"
+                 "濃い数字は<b>壊れたことで判明した値</b>です。"
+                 "整備するとこの寿命ぶんだけ復活します（設定上限まで回復するのではなく、"
+                 "その個体の元の寿命に戻る）。</p>")
     p.append("</div></div>")
 
     # ラダー

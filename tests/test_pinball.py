@@ -253,7 +253,10 @@ def test_drone_repair_restores_the_jig() -> None:
         w._drone()
         if not w.drone.active:
             break
-    assert not j.broken and j.durability == j.max_durability and j.hits == 0
+    # 整備は「その個体の元の寿命」に戻す。設定上限 (max_durability) まで回復させると、
+    # 耐久 6 の個体が修理のたびに 9 になり、直すほど新品より強くなってしまう
+    assert not j.broken and j.durability == j.initial_durability and j.hits == 0
+    assert j.initial_durability <= j.max_durability
 
 
 def test_drone_fails_when_it_touches_a_healthy_jig() -> None:
@@ -397,7 +400,7 @@ def test_svg_and_html_are_self_contained() -> None:
     ET.fromstring(svg)
     assert "<animateTransform" in svg and "<script" not in svg
     doc = pinball_html(res, svg)
-    for key in ("ラダーロジック", "シーケンサの遷移", "AI 層の入出力", "隠れ耐久度"):
+    for key in ("ラダーロジック", "シーケンサの遷移", "AI 層の入出力", "真の寿命(答え)"):
         assert key in doc, key
     for text in (svg, doc):
         refs = re.findall(r'(?:src|href|xlink:href)\s*=\s*["\']([^"\']+)', text)
