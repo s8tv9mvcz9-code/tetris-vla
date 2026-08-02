@@ -268,15 +268,15 @@ code{font-size:.85em}
 <rect x="261.2" y="9" width="2.0" height="4" rx="1" fill="#5ac8fa" opacity="0.9"><title>[60] VLA 0.00s</title></rect>
 </g></svg></div><div>
 <table><tr><th>崩したブロック</th><td>24/24</td></tr><tr><th>列ごとの内訳</th><td>[4, 4, 4, 4, 4, 4]</td></tr><tr><th>均等性 (工程の消化)</th><td>1.0  (1.0 が理想)</td></tr><tr><th>ジグ打数 / 均等性</th><td>[6, 4, 4, 4, 4, 6] / 0.667</td></tr><tr><th>摩耗して素通りになったジグ</th><td>1</td></tr><tr><th>スコア</th><td>950.0 / 1000</td></tr><tr><th>パドル命中 / ロスト / 残機</th><td>6 / 2 / 2</td></tr><tr><th>修理</th><td>成功 0 / 失敗 1</td></tr><tr><th>ラダースキャン</th><td>1496 回</td></tr><tr><th>シーケンサ遷移</th><td>8 回</td></tr></table>
-<table style='margin-top:.7rem'><tr><th>ジグ</th><th>観測できた打数</th><th>隠れ耐久度(答え)</th><th>状態</th></tr>
-<tr><td>#0</td><td>6</td><td>9 以下</td><td>健全</td></tr>
-<tr><td>#1</td><td>4</td><td>9 以下</td><td>健全</td></tr>
-<tr><td>#2</td><td>4</td><td>9 以下</td><td>健全</td></tr>
-<tr><td>#3</td><td>4</td><td>9 以下</td><td>健全</td></tr>
-<tr><td>#4</td><td>4</td><td>9 以下</td><td>健全</td></tr>
-<tr><td>#5</td><td>6</td><td>9 以下</td><td>素通り</td></tr>
+<table style='margin-top:.7rem'><tr><th>ジグ</th><th>観測できた打数</th><th>外から言えること</th><th>真の寿命(答え)</th><th>状態</th></tr>
+<tr><td>#0</td><td>6</td><td>6 打でまだ無事 → 寿命は <b>6 より大きい</b>としか言えない</td><td>—</td><td>健全</td></tr>
+<tr><td>#1</td><td>4</td><td>4 打でまだ無事 → 寿命は <b>4 より大きい</b>としか言えない</td><td>—</td><td>健全</td></tr>
+<tr><td>#2</td><td>4</td><td>4 打でまだ無事 → 寿命は <b>4 より大きい</b>としか言えない</td><td>—</td><td>健全</td></tr>
+<tr><td>#3</td><td>4</td><td>4 打でまだ無事 → 寿命は <b>4 より大きい</b>としか言えない</td><td>—</td><td>健全</td></tr>
+<tr><td>#4</td><td>4</td><td>4 打でまだ無事 → 寿命は <b>4 より大きい</b>としか言えない</td><td>—</td><td>健全</td></tr>
+<tr><td>#5</td><td>6</td><td><b>6</b> 打で壊れた → 寿命が確定した</td><td>—</td><td>素通り</td></tr>
 </table>
-<p class='lede' style='font-size:.76rem'>打数は見えるが耐久度は見えない。「そろそろ壊れる」は推測するしかない。</p>
+<p class='lede' style='font-size:.76rem'>打数は見えるが、寿命は見えない。<b>壊れて初めて答えが分かる</b>（そのときには手遅れ）という非対称がこの題材の芯です。「真の寿命」列は答え合わせ用で、運転中の層には渡していません — 薄い数字は<b>まだ本人にも分かっていない値</b>、濃い数字は<b>壊れたことで判明した値</b>です。整備するとこの寿命ぶんだけ復活します（設定上限まで回復するのではなく、その個体の元の寿命に戻る）。</p>
 </div></div>
 <h2>ラダーロジック (毎スキャン評価される)</h2>
 <p class='lede'>上から順に評価され、上のラングが書いたコイルを下のラングが読めます。だから挙動が完全に読み切れる — ここが AI に置き換えられない理由です。</p>
@@ -1055,6 +1055,111 @@ code{font-size:.85em}
 <text x="307.0" y="263" fill="#ffd24d" font-size="8.5" text-anchor="middle">入 1 回</text>
 <text x="8" y="302" fill="#5f5f70" font-size="8">暗い枠と細い矢印は「設計にはあるがこの回では通らなかった」経路。中断は VLM の助言ではなくラダーの安全条件で入る</text>
 </svg></div>
+<h2>同じものを構造化テキスト (ST) で</h2>
+<p class='lede'>ラダーは接点の直並列には向きますが、状態遷移を読むには向きません。実務でも段取りは FB の ST で書くので、同じ中身を IEC 61131-3 の書き方でも出します。<b>この 2 つは手書きではなく実装から生成しています</b> — ラダーは <code>build_ladder()</code> のラング定義から、シーケンサは <code>Sequencer.step</code> の構文木から抽出しているので、実装を直せばこの ST も追随します（ドキュメントだけ古くなることがない）。</p>
+<details open><summary>FB_RepairSequencer — 段取りのステートマシン</summary><pre class='rung'>FUNCTION_BLOCK FB_RepairSequencer
+VAR_INPUT
+    jig_broken      : BOOL;  (* 素通りのジグがある *)
+    repair_permit   : BOOL;  (* ラダーが出す修理許可 *)
+    repair_cancel   : BOOL;  (* ラダーが出す取消 *)
+    vlm_repair_ok   : BOOL;  (* VLM の助言。命令ではない *)
+    drone_done      : BOOL;
+    drone_failed    : BOOL;
+END_VAR
+VAR
+    state : E_SeqState := IDLE;
+END_VAR
+
+(* 安全に関わる判断はこの FB が持つ。VLM は助言するだけで
+   拒否権はこちら側にある、という権限配置をコードで示す。 *)
+
+CASE state OF
+    IDLE:  (* 待機 *)
+        state := RUN;  (* 起動 *)
+
+    RUN:  (* 通常運転 *)
+        IF jig_broken THEN
+            state := FAULT;  (* ジグ#N 素通りを検知 *)
+        END_IF;
+
+    FAULT:  (* 故障検知 *)
+        IF repair_permit AND (NOT repair_cancel) THEN
+            state := PLAN;  (* ラダーが修理許可を出した *)
+        ELSIF NOT jig_broken THEN
+            state := RUN;  (* 故障が解消した *)
+        END_IF;
+
+    PLAN:  (* 修理計画 *)
+        IF NOT vlm_repair_ok THEN
+            state := RUN;  (* VLM が今は危険と助言 → 見送り *)
+        ELSIF jig_broken THEN
+            state := DISPATCH;  (* 目標ジグ#N を決定 *)
+        ELSE
+            state := RUN;  (* 対象なし *)
+        END_IF;
+
+    DISPATCH:  (* 救済機発進 *)
+        state := REPAIR;  (* 救済機発進 *)
+
+    REPAIR:  (* 修理中 *)
+        IF drone_failed THEN
+            state := ABORT;  (* 修理失敗: N *)
+        ELSIF drone_done THEN
+            state := RECOVER;  (* 修理完了 *)
+        END_IF;
+
+    RECOVER:  (* 復帰 *)
+        state := RUN;  (* 定常へ復帰 *)
+
+    ABORT:  (* 中断 *)
+        state := RUN;  (* 定常へ復帰 *)
+
+END_CASE;
+END_FUNCTION_BLOCK</pre></details>
+<details><summary>FB_GateInterlock — ラダーと同じ論理を ST で</summary><pre class='rung'>FUNCTION_BLOCK FB_GateInterlock
+VAR_INPUT
+    ball_upper      : BOOL;
+    ball_lower      : BOOL;
+    stall_timer     : BOOL;
+    alt_flag        : BOOL;
+    drone_active    : BOOL;
+    jig_broken      : BOOL;
+    ball_in_danger  : BOOL;
+    drone_abort     : BOOL;
+END_VAR
+VAR_OUTPUT
+    hold_gates      : BOOL;
+    gate0_open      : BOOL;
+    gate1_open      : BOOL;
+    gate_inhibit    : BOOL;
+    repair_permit   : BOOL;
+    repair_cancel   : BOOL;
+END_VAR
+
+(* PLC のスキャンと同じく上から順に評価する。
+   上の行が書いたコイルを下の行が読めることに意味がある。 *)
+
+    (* R1 上部滞留でゲート閉 — ボールが上段にある間はゲートを開けない *)
+    hold_gates := (ball_upper);
+
+    (* R2 滞留タイマでゲート開 — 下段で停滞したらゲート 0 を開けてボールを落とす *)
+    gate0_open := (ball_lower AND stall_timer AND NOT hold_gates);
+
+    (* R3 交互ゲート — ゲート 0 と交互に動かして偏りを防ぐ *)
+    gate1_open := (gate0_open AND alt_flag);
+
+    (* R4 救済機作動中はゲート禁止 — ドローン飛行中はゲート操作を禁止 (巻き込み防止) *)
+    gate_inhibit := (drone_active);
+
+    (* R5 修理許可ラッチ — 故障検知 かつ ボールが危険域外 なら修理許可を保持 *)
+    repair_permit := (jig_broken AND NOT ball_in_danger AND NOT drone_active) OR repair_permit;
+    (* ↑ 末尾の OR が自己保持 (ラッチ) *)
+
+    (* R6 危険域で許可解除 — 危険域侵入または中断要求で許可を取り消す *)
+    repair_cancel := (ball_in_danger) OR (drone_abort);
+
+END_FUNCTION_BLOCK</pre></details>
+<p class='lede' style='font-size:.76rem'>ST 側の <code>IF / ELSIF / ELSE</code> は Python の分岐と 1 対 1 に対応させてあります。独立した <code>IF</code> に並べ替えると排他性が壊れ、PLAN 状態で 2 つの遷移が同時に成立してしまうためです。</p>
 <p class='lede'>VLM は「今なら修理してよい」と<b>助言</b>するだけで、実際に救済機を出す/止めるの判断は必ずこのステートマシンを通ります。AI 連動でも安全側の権限は組み込みに残す、という形です。</p>
 <table class='full'><tr><th>t</th><th>遷移</th><th>理由</th></tr>
 <tr><td>0.0s</td><td><span class='tag seqt'>待機 → 通常運転</span></td><td>起動</td></tr>
