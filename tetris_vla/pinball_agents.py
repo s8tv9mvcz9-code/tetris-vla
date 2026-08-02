@@ -522,7 +522,12 @@ class StackConfig:
     vla_every: int = 25       # VLA の行動列の長さ = 再計画周期
     vlm_every: int = 150      # VLM の問い合わせ周期 (tick)
     slowmo: float = 1.0       # 推論レイテンシを tick に換算するときの緩和倍率
+    #: 陳腐化の**上限**。実測ではない。ここが小さいと、遅いモデルの影響が
+    #: 頭打ちにされて「古い助言でも回る」ことの検証にならない (既定 30 = 0.6秒)
     max_drift_ticks: int = 30
+    #: 0 より大きいと陳腐化をこの値に固定する。遅いモデルを回さずに
+    #: 「助言が N tick 古い」だけを再現するアブレーション用の口
+    force_drift_ticks: int = 0
     keep_png_every: int = 1   # 記録に画像を残す間隔 (1 で全部)
     verbose: bool = True
 
@@ -553,6 +558,17 @@ def run_stack(
             print(m, file=out, flush=True)
 
     def drift(latency: float) -> int:
+        """推論にかかった実時間を「助言が何 tick 古いか」へ換算する。
+
+        **max_drift_ticks は上限であって実測ではない。** 既定の 30 だと、
+        実機 qwen の 374 秒 (本来 18,700 tick 相当) が 30 tick = 0.60 秒として
+        扱われる。つまり「上位が古い助言を返している間も下位が回した」という
+        主張を、この設定では検証できていない。低速 sim で見るときは slowmo を
+        上げて実時間を tick に落とし、上限がそれを隠さない値にすること。
+        """
+        if scfg.force_drift_ticks > 0:
+            # アブレーション用。遅いモデルを実際に回さずに陳腐化だけを注入する
+            return scfg.force_drift_ticks
         return min(scfg.max_drift_ticks,
                    int(round(latency / max(1e-6, world.cfg.dt * scfg.slowmo))))
 

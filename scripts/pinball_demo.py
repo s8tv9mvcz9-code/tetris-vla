@@ -44,6 +44,11 @@ def main() -> int:
     # 文脈長。既定 (None) は ollama 任せで従来どおり。常駐メモリが文脈長で
     # 決まっている仮説を検証するための口 — docs/physical-ai-realtime.md 参照
     ap.add_argument("--num-ctx", type=int, default=None)
+    # 陳腐化の上限。既定 30 は「助言が 0.6 秒古い」相当で、実測では
+    # 効果が出ない領域 (12 seed で -3 点)。低速 sim で見るときは上げる
+    ap.add_argument("--max-drift", type=int, default=30)
+    # 遅いモデルを回さずに陳腐化だけ注入するアブレーション用
+    ap.add_argument("--force-drift", type=int, default=0)
     a = ap.parse_args()
 
     world = PinballWorld(PinballConfig(seed=a.seed, max_ticks=a.max_ticks))
@@ -65,7 +70,9 @@ def main() -> int:
 
     t0 = time.perf_counter()
     res = run_stack(world, paddle, strat,
-                    StackConfig(vla_every=a.chunk, vlm_every=a.vlm_every, slowmo=a.slowmo))
+                    StackConfig(vla_every=a.chunk, vlm_every=a.vlm_every, slowmo=a.slowmo,
+                               max_drift_ticks=a.max_drift,
+                               force_drift_ticks=a.force_drift))
     print(f"\n実時間 {time.perf_counter()-t0:.0f}s", file=sys.stderr)
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)) or ".", exist_ok=True)
