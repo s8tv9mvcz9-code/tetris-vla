@@ -53,7 +53,11 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
     dur = max(1.0, n * dt / max(0.05, speed))
     kt = _fmt([i / max(1, n - 1) for i in range(n)], 4)
     W, H = int(FIELD_W * px), int(FIELD_H * px)
-    band = 30
+    # 盤面は 264px しかない。下帯の高さは中身から逆算しないとすぐ溢れる
+    seq_states = sorted({f["state"] for f in frames})
+    seq_per = 3
+    seq_rows = max(1, (len(seq_states) + seq_per - 1) // seq_per)
+    band = 14 + seq_rows * 11 + 2 * 13 + 10
     o: list[str] = []
     a = o.append
 
@@ -64,6 +68,16 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
 
     # ブロック: 各セルの残存を discrete で明滅させる
     cw = FIELD_W / N_SEG
+
+    # 列レーン。**ジグ j に当たると列 j が 1 個崩れる** という対応関係は
+    # ジグの縁取り色だけだと気づけないので、背景の帯でも結んでおく。
+    for c in range(N_SEG):
+        lc = BLOCK_COLS[c % len(BLOCK_COLS)]
+        a(f'<rect x="{c*cw*px:.1f}" y="{BLOCK_TOP*px:.1f}" width="{cw*px:.1f}" '
+          f'height="{(PADDLE_Y-BLOCK_TOP)*px:.1f}" fill="{lc}" opacity="0.05"/>')
+        a(f'<text x="{(c+0.5)*cw*px:.1f}" y="{(BLOCK_TOP+BLOCK_ROWS*BLOCK_H)*px+14:.1f}" '
+          f'fill="{lc}" font-size="9" text-anchor="middle" opacity="0.6">列{c}</text>')
+
     for r in range(BLOCK_ROWS):
         for c in range(N_SEG):
             idx = r * N_SEG + c
@@ -124,7 +138,10 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
     for k in range(nb):
         bx = [(f["balls"][k][0] * px if len(f["balls"]) > k else -99) for f in frames]
         by = [(f["balls"][k][1] * px if len(f["balls"]) > k else -99) for f in frames]
-        a(f'<circle r="{BALL_R*px:.1f}" fill="#fff" stroke="#9ad" stroke-width="1">'
+        # cx/cy の初期値を必ず入れる。SMIL が動かないビューア (静的プレビュー、
+        # PDF 書き出し等) だと、無いと原点に張り付いて盤面が読めなくなる
+        a(f'<circle r="{BALL_R*px:.1f}" cx="{bx[0]:.1f}" cy="{by[0]:.1f}" '
+          f'fill="#fff" stroke="#9ad" stroke-width="1">'
           f'<animate attributeName="cx" values="{_fmt(bx)}" keyTimes="{kt}" dur="{dur:.2f}s" '
           f'repeatCount="indefinite"/><animate attributeName="cy" values="{_fmt(by)}" '
           f'keyTimes="{kt}" dur="{dur:.2f}s" repeatCount="indefinite"/></circle>')
@@ -133,7 +150,8 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
     dx = [f["drone"][0] * px for f in frames]
     dy = [f["drone"][1] * px for f in frames]
     da = [float(f["drone"][2]) for f in frames]
-    a(f'<rect width="{1.0*px:.1f}" height="{1.0*px:.1f}" fill="#ff78dc" opacity="0" rx="2">'
+    a(f'<rect width="{1.0*px:.1f}" height="{1.0*px:.1f}" x="{dx[0]-0.5*px:.1f}" '
+      f'y="{dy[0]-0.5*px:.1f}" fill="#ff78dc" opacity="0" rx="2">'
       f'<animate attributeName="x" values="{_fmt([v-0.5*px for v in dx])}" keyTimes="{kt}" '
       f'dur="{dur:.2f}s" repeatCount="indefinite"/>'
       f'<animate attributeName="y" values="{_fmt([v-0.5*px for v in dy])}" keyTimes="{kt}" '
@@ -141,16 +159,45 @@ def pinball_svg(res: dict, px: int = 11, speed: float = 1.0, stride: int = 2) ->
       f'<animate attributeName="opacity" values="{_fmt(da,0)}" keyTimes="{kt}" '
       f'dur="{dur:.2f}s" repeatCount="indefinite" calcMode="discrete"/></rect>')
 
-    # 下帯: シーケンサの状態を文字で
-    states = sorted({f["state"] for f in frames})
-    a(f'<g transform="translate(4,{H+12})">')
-    a(f'<text x="0" y="0" fill="{DIM}" font-size="9">シーケンサ:</text>')
-    for i, st in enumerate(states):
+    # 下帯 1: シーケンサの状態。盤面幅に収まるよう seq_per 個ずつ折り返す
+    a(f'<g transform="translate(4,{H+11})" font-size="8.5">')
+    a(f'<text x="0" y="0" fill="{DIM}">シーケンサ:</text>')
+    for i, st in enumerate(seq_states):
         vals = [1.0 if f["state"] == st else 0.0 for f in frames]
-        a(f'<text x="{62+i*54}" y="0" fill="{LAYER_C["sequencer"]}" font-size="9" opacity="0.18">'
-          f'{html.escape(st)}<animate attributeName="opacity" values="{_fmt(vals,2)}" '
-          f'keyTimes="{kt}" dur="{dur:.2f}s" repeatCount="indefinite" calcMode="discrete"/></text>')
+        a(f'<text x="{56+(i%seq_per)*70}" y="{(i//seq_per)*11}" '
+          f'fill="{LAYER_C["sequencer"]}" opacity="0.18">{html.escape(st)}'
+          f'<animate attributeName="opacity" values="{_fmt(vals,2)}" keyTimes="{kt}" '
+          f'dur="{dur:.2f}s" repeatCount="indefinite" calcMode="discrete"/></text>')
     a('</g>')
+
+    # 下帯 2: 凡例。盤面の記号は説明がないと読めないので、同じ絵をそのまま並べる
+    ly = H + 13 + seq_rows * 11
+    for row, items in enumerate(
+            ((("ball", "ボール"), ("paddle", "パドル"), ("drone", "救済機")),
+             (("jig", "ジグ健全"), ("broken", "ジグ摩耗"), ("gate", "ゲート開/閉")))):
+        a(f'<g transform="translate(6,{ly + row*13})" font-size="8">')
+        lx = 0.0
+        for kind, label in items:
+            if kind == "ball":
+                a(f'<circle cx="{lx+5:.1f}" cy="-3" r="4" fill="#fff" stroke="#9ad"/>')
+            elif kind == "paddle":
+                a(f'<rect x="{lx:.1f}" y="-5" width="14" height="4" fill="#64f0b4" rx="2"/>')
+            elif kind == "jig":
+                a(f'<circle cx="{lx+5:.1f}" cy="-3" r="4.5" fill="#78c8ff" '
+                  f'stroke="{BLOCK_COLS[0]}" stroke-width="2"/>')
+            elif kind == "broken":
+                a(f'<circle cx="{lx+5:.1f}" cy="-3" r="4.5" fill="none" stroke="#6a6a78" '
+                  f'stroke-width="2" stroke-dasharray="3 3"/>')
+            elif kind == "gate":
+                a(f'<rect x="{lx:.1f}" y="-5" width="7" height="4" fill="#3cc87a"/>')
+                a(f'<rect x="{lx+8:.1f}" y="-5" width="7" height="4" fill="#c85050"/>')
+            else:
+                a(f'<rect x="{lx:.1f}" y="-7" width="8" height="8" fill="#ff78dc" rx="2"/>')
+            a(f'<text x="{lx+18:.1f}" y="0" fill="{DIM}">{html.escape(label)}</text>')
+            lx += 18 + len(label) * 8.6 + 8
+        a('</g>')
+    a(f'<text x="6" y="{ly + 2*13 + 2}" fill="#5f5f70" font-size="7.5">'
+      f'薄い縦帯＝列。同色のジグを叩くとその列が 1 個崩れる</text>')
 
     # 推論帯 (VLA / VLM の呼び出し位置)
     total = max(1, res["frames"][-1]["tick"])
@@ -432,19 +479,20 @@ def layer_stack_diagram(cfg: dict, width: int = 940) -> str:
             ("sequencer", "シーケンサ", 1, "故障検知 → 修理段取り → 復帰"),
             ("vla", "VLA", int(cfg.get("vla_every", 25) or 25), "パドル連続制御 (1 回で数十手)"),
             ("vlm", "VLM", int(cfg.get("vlm_every", 150) or 150), "狙う区画の助言 (命令権なし)")]
-    lab_w, row_h, top = 128, 62, 26
+    lab_w, row_h, top = 128, 62, 46
     plot_w = width - lab_w - 20
     H = top + row_h * len(rows) + 10
     px = plot_w / span
     o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
          f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
          f'<rect width="{width}" height="{H}" fill="#0e0e14"/>',
-         f'<text x="6" y="15" fill="{DIM}" font-size="10">制御層ごとの発火タイミング '
-         f'(横軸 {span} tick = {span*dt:.0f} 秒)</text>']
+         f'<text x="6" y="14" fill="{INK}" font-size="10.5">制御層ごとの発火タイミング</text>',
+         f'<text x="6" y="27" fill="{DIM}" font-size="8.5">'
+         f'横軸 {span} tick = {span*dt:.0f} 秒 (実寸)</text>']
     for k in range(0, span + 1, 50):          # 時間目盛
         x = lab_w + k * px
-        o.append(f'<line x1="{x:.1f}" y1="{top-6}" x2="{x:.1f}" y2="{H-8}" stroke="#22222d"/>')
-        o.append(f'<text x="{x+3:.1f}" y="{top-10}" fill="#6d6d7d" font-size="9">'
+        o.append(f'<line x1="{x:.1f}" y1="{top-8}" x2="{x:.1f}" y2="{H-8}" stroke="#22222d"/>')
+        o.append(f'<text x="{x+3:.1f}" y="{top-12}" fill="#6d6d7d" font-size="9">'
                  f'{k*dt:.0f}s</text>')
     for i, (key, name, every, role) in enumerate(rows):
         y = top + i * row_h
@@ -461,7 +509,7 @@ def layer_stack_diagram(cfg: dict, width: int = 940) -> str:
             o.append(f'<rect x="{lab_w}" y="{y+16}" width="{plot_w:.1f}" height="20" '
                      f'fill="{c}" opacity="0.5"/>')
             o.append(f'<text x="{lab_w+8}" y="{y+30}" fill="#0e0e14" font-size="9">'
-                     f'決定的・毎スキャン評価</text>')
+                     f'途切れなく評価され続ける — 隙間がない</text>')
         else:
             for k in range(0, span, every):
                 x = lab_w + k * px
@@ -469,8 +517,309 @@ def layer_stack_diagram(cfg: dict, width: int = 940) -> str:
                          f'height="20" fill="{c}" opacity="0.18"/>')
                 o.append(f'<line x1="{x:.1f}" y1="{y+12}" x2="{x:.1f}" y2="{y+40}" '
                          f'stroke="{c}" stroke-width="2"/>')
-            o.append(f'<text x="{lab_w+4}" y="{y+52}" fill="#5f5f70" font-size="8">'
-                     f'縦棒＝指令が降りてくる瞬間。その間、下位は古い指令で走り続ける</text>')
+            if i == len(rows) - 1:
+                o.append(f'<text x="{lab_w+4}" y="{y+52}" fill="#5f5f70" font-size="8">'
+                         f'縦棒＝指令が降りてくる瞬間。その間、下位は古い指令のまま走り続ける'
+                         f'（＝上位の判断は必ず過去の盤面に対する答え）</text>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
+# --------------------------------------------------------------------------
+# シーケンサ / ラダーの全体像と、デモ中の推移
+# --------------------------------------------------------------------------
+
+_SEQ_CHAIN = ["待機", "通常運転", "故障検知", "修理計画", "救済機発進", "修理中", "復帰"]
+_SEQ_OFF = ["中断"]
+
+
+def seq_flow_diagram(seq_events: Sequence[dict], width: int = 940) -> str:
+    """シーケンサのステートマシンを、**このデモで実際に通った回数つき**で描く。
+
+    設計図としての遷移図と、実行ログの回数を 1 枚に重ねるのが狙い。
+    通らなかった遷移は暗いまま残すので「設計にあるのに使われなかった経路」も見える。
+    """
+    seen = list(_SEQ_CHAIN)
+    for e in seq_events:                       # ログにしか出てこない状態も拾う
+        for s in (e["frm"], e["to"]):
+            if s not in seen and s not in _SEQ_OFF:
+                seen.append(s)
+    off = [s for s in _SEQ_OFF if any(s in (e["frm"], e["to"]) for e in seq_events)] or _SEQ_OFF
+    nodes = seen + off
+
+    edges: dict[tuple[str, str], list[dict]] = {}
+    for e in seq_events:
+        edges.setdefault((e["frm"], e["to"]), []).append(e)
+    visits: dict[str, int] = {}
+    for e in seq_events:
+        visits[e["to"]] = visits.get(e["to"], 0) + 1
+
+    NW, NH, gap, y_top, y_off = 106, 34, 12, 118, 236
+    pos: dict[str, tuple[float, float]] = {}
+    for i, s in enumerate(seen):
+        pos[s] = (18 + i * (NW + gap), y_top)
+    for i, s in enumerate(off):
+        pos[s] = (18 + 2 * (NW + gap), y_off)
+    H = y_off + NH + 46
+    c = LAYER_C["sequencer"]
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>',
+         f'<text x="8" y="16" fill="{INK}" font-size="10.5">'
+         f'シーケンサの状態遷移（太い矢印＝このデモで実際に通った経路）</text>',
+         # markerUnits を既定のままにすると stroke-width に比例して矢印が肥大する
+         '<defs>'
+         f'<marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" '
+         f'markerUnits="userSpaceOnUse" orient="auto">'
+         f'<path d="M0,0.5 L8,4 L0,7.5 z" fill="{c}"/></marker>'
+         f'<marker id="ahd" markerWidth="8" markerHeight="8" refX="7" refY="4" '
+         f'markerUnits="userSpaceOnUse" orient="auto">'
+         f'<path d="M0,0.5 L8,4 L0,7.5 z" fill="#3a3a48"/></marker></defs>']
+
+    # 設計上ありうる遷移（鎖 + 復帰→通常運転 + 任意状態→中断）も薄く描く
+    designed = {(seen[i], seen[i + 1]) for i in range(len(seen) - 1)}
+    designed |= {("復帰", "通常運転")} if "復帰" in pos and "通常運転" in pos else set()
+    for k in list(edges) + sorted(designed):
+        frm, to = k
+        if frm not in pos or to not in pos:
+            continue
+        evs = edges.get(k, [])
+        hot = bool(evs)
+        col = c if hot else "#3a3a48"
+        w = 1.0 + min(3.0, len(evs) * 0.7) if hot else 0.9
+        x0, y0 = pos[frm]
+        x1, y1 = pos[to]
+        if y0 == y1 and x1 > x0:                       # 前進: 直線
+            a0, a1 = x0 + NW, x1
+            o.append(f'<line x1="{a0}" y1="{y0+NH/2}" x2="{a1-8}" y2="{y1+NH/2}" '
+                     f'stroke="{col}" stroke-width="{w:.1f}" '
+                     f'marker-end="url(#{"ah" if hot else "ahd"})"/>')
+            mx = (a0 + a1) / 2
+        elif y0 == y1:                                  # 後退: 上に弧を描いて戻す
+            a0, a1 = x0 + NW / 2, x1 + NW / 2
+            top = y0 - 44
+            o.append(f'<path d="M {a0},{y0} Q {(a0+a1)/2},{top} {a1},{y1-2}" fill="none" '
+                     f'stroke="{col}" stroke-width="{w:.1f}" '
+                     f'marker-end="url(#{"ah" if hot else "ahd"})"/>')
+            mx = (a0 + a1) / 2
+        else:                                           # 中断への出入りは縦
+            a0, a1 = x0 + NW / 2, x1 + NW / 2
+            o.append(f'<path d="M {a0},{y0+NH} Q {(a0+a1)/2},{(y0+y1)/2+18} {a1},{y1-4}" '
+                     f'fill="none" stroke="{col}" stroke-width="{w:.1f}" '
+                     f'marker-end="url(#{"ah" if hot else "ahd"})"/>')
+            mx = (a0 + a1) / 2
+        if hot:
+            ly = y0 - 50 if (y0 == y1 and x1 < x0) else (y0 + NH / 2 - 6 if y0 == y1 else
+                                                         (y0 + y1) / 2 + 6)
+            o.append(f'<text x="{mx:.0f}" y="{ly:.0f}" fill="{c}" font-size="9" '
+                     f'text-anchor="middle">×{len(evs)}</text>')
+
+    # 初期状態は「遷移で入る」ことがないので visits が 0 になる。未使用と混同しない
+    initial = seq_events[0]["frm"] if seq_events else None
+    for s in nodes:
+        x, y = pos[s]
+        n = visits.get(s, 0)
+        on = n > 0 or s == initial
+        o.append(f'<rect x="{x}" y="{y}" width="{NW}" height="{NH}" rx="6" '
+                 f'fill="{c if on else "#16161e"}" fill-opacity="{0.20 if on else 1}" '
+                 f'stroke="{c if on else "#33333f"}" stroke-width="{1.8 if on else 1}"/>')
+        o.append(f'<text x="{x+NW/2}" y="{y+15}" fill="{INK if on else DIM}" font-size="10" '
+                 f'text-anchor="middle">{html.escape(s)}</text>')
+        cap = f"入 {n} 回" if n else ("初期状態" if s == initial else "未使用")
+        o.append(f'<text x="{x+NW/2}" y="{y+27}" fill="{c if on else "#4a4a58"}" font-size="8.5" '
+                 f'text-anchor="middle">{cap}</text>')
+
+    o.append(f'<text x="8" y="{H-14}" fill="#5f5f70" font-size="8">'
+             f'暗い枠と細い矢印は「設計にはあるがこの回では通らなかった」経路。'
+             f'中断は VLM の助言ではなくラダーの安全条件で入る</text>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
+def ladder_overview_diagram(rungs: Sequence, width: int = 940) -> str:
+    """ラダーの全体像。入力 → ラング → コイル、そして **コイルがどのラングに戻るか**。
+
+    表では「上のラングが書いたコイルを下のラングが読める」と書いてあるだけだったが、
+    どのコイルが内部で再利用され、どのコイルが外（シーケンサ）へ出ていくのかは
+    追えなかった。そこを線で結ぶ。
+    """
+    coils = {r.coil for r in rungs}
+    contacts_of = {}
+    for r in rungs:
+        cs = [c.lstrip("!") for b in (r.branches or []) for c in b]
+        contacts_of[r.coil] = cs
+    inputs: list[str] = []
+    for r in rungs:
+        for c in contacts_of[r.coil]:
+            if c not in coils and c not in inputs:
+                inputs.append(c)
+    consumed = {c for cs in contacts_of.values() for c in cs if c in coils}
+
+    RH, top = 46, 44
+    n = max(len(inputs), len(rungs))
+    H = top + n * RH + 40
+    xi, xr, xc = 16, 330, 700
+    WI, WR, WC = 132, 150, 150
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>']
+    for x, w, t in ((xi, WI, "外部入力 (センサ・タイマ)"), (xr, WR, "ラング"),
+                    (xc, WC, "出力コイル")):
+        o.append(f'<text x="{x}" y="22" fill="{DIM}" font-size="9.5">{t}</text>')
+
+    ipos = {s: top + i * RH for i, s in enumerate(inputs)}
+    rpos = {r.coil: top + i * RH for i, r in enumerate(rungs)}
+    for s, y in ipos.items():
+        o.append(f'<rect x="{xi}" y="{y}" width="{WI}" height="24" rx="4" fill="#16161e" '
+                 f'stroke="#5ac8fa" stroke-width="1"/>')
+        o.append(f'<text x="{xi+WI/2}" y="{y+16}" fill="#9fd8ff" font-size="9" '
+                 f'text-anchor="middle">{html.escape(s)}</text>')
+    for r in rungs:
+        y = rpos[r.coil]
+        o.append(f'<rect x="{xr}" y="{y}" width="{WR}" height="24" rx="4" fill="#16161e" '
+                 f'stroke="{LAYER_C["ladder"]}" stroke-width="1.4"/>')
+        rid, _, rlabel = r.name.partition(" ")
+        o.append(f'<text x="{xr+WR/2}" y="{y+16}" fill="{INK}" font-size="8.5" '
+                 f'text-anchor="middle">{html.escape(rid)} '
+                 f'{html.escape(rlabel[:12])}</text>')
+        exported = r.coil not in consumed
+        col = "#ffd24d" if exported else LAYER_C["ladder"]
+        dash = ' stroke-dasharray="4 3"' if exported else ""
+        o.append(f'<rect x="{xc}" y="{y}" width="{WC}" height="24" rx="4" fill="#16161e" '
+                 f'stroke="{col}" stroke-width="1.4"{dash}/>')
+        o.append(f'<text x="{xc+WC/2}" y="{y+16}" fill="{col}" font-size="9" '
+                 f'text-anchor="middle">{html.escape(r.coil)}</text>')
+        o.append(f'<line x1="{xr+WR}" y1="{y+12}" x2="{xc}" y2="{y+12}" stroke="{col}" '
+                 f'stroke-width="1.2" marker-end="url(#oa)"/>')
+        if exported:
+            o.append(f'<text x="{xc+WC+6}" y="{y+16}" fill="#ffd24d" font-size="8">'
+                     f'→ シーケンサへ</text>')
+        # 入力 → ラング
+        for cname in contacts_of[r.coil]:
+            if cname in ipos:
+                y0 = ipos[cname] + 12
+                o.append(f'<path d="M {xi+WI},{y0} C {xi+WI+70},{y0} {xr-70},{y+12} '
+                         f'{xr},{y+12}" fill="none" stroke="#2f4a5c" stroke-width="1"/>')
+            elif cname in rpos:               # 内部フィードバック: コイル → 下のラング
+                y0 = rpos[cname] + 24
+                o.append(f'<path d="M {xc+WC/2},{y0} C {xc+WC/2},{y0+22} '
+                         f'{xr+WR/2},{y+12-26} {xr+WR/2},{y}" fill="none" '
+                         f'stroke="{LAYER_C["ladder"]}" stroke-width="1.2" '
+                         f'stroke-dasharray="3 2" opacity="0.8" marker-end="url(#oa)"/>')
+        if r.seal:
+            o.append(f'<text x="{xc+WC/2}" y="{y+34}" fill="{DIM}" font-size="7.5" '
+                     f'text-anchor="middle">自己保持</text>')
+    o.insert(2, '<defs><marker id="oa" markerWidth="7" markerHeight="7" refX="6" refY="3.5" '
+                'markerUnits="userSpaceOnUse" orient="auto">'
+                '<path d="M0,0.5 L7,3.5 L0,6.5 z" fill="#7ee787"/></marker></defs>')
+    o.append(f'<text x="16" y="{H-16}" fill="#5f5f70" font-size="8">'
+             f'実線＝そのラングが書くコイル。破線の緑＝コイルが下のラングの接点として'
+             f'戻る内部フィードバック。<tspan fill="#ffd24d">黄色の破線枠</tspan>＝'
+             f'どのラングも読まないコイル＝シーケンサへの出力</text>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
+def demo_timeline_diagram(res: dict, width: int = 940) -> str:
+    """1 本の時間軸に、シーケンサの状態・VLM の助言・盤面で起きたことを重ねる。
+
+    層ごとに別々の表を見ても相関が読めないので、**同じ横軸**に載せる。
+    「VLM がこう言った → シーケンサがこう動いた → ブロックが崩れた」が
+    上から下に読める形にするのが狙い。
+    """
+    cfg = res.get("config", {})
+    dt = float(cfg.get("dt", 0.02))
+    frames = res.get("frames") or []
+    n_tick = max([f["tick"] for f in frames] or [1])
+    lab_w, top = 118, 40
+    plot_w = width - lab_w - 16
+    px = plot_w / max(1, n_tick)
+    lanes = ["シーケンサ", "VLM の助言", "盤面で起きたこと", "崩したブロック"]
+    row_h = 46
+    H = top + row_h * len(lanes) + 34
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>',
+         f'<text x="8" y="15" fill="{INK}" font-size="10.5">デモ 1 回ぶんの推移と相関'
+         f'（同じ時間軸に 4 段重ね）</text>']
+    for k in range(0, n_tick + 1, max(1, n_tick // 8)):
+        x = lab_w + k * px
+        o.append(f'<line x1="{x:.1f}" y1="{top-8}" x2="{x:.1f}" y2="{H-24}" stroke="#22222d"/>')
+        o.append(f'<text x="{x+3:.1f}" y="{top-11}" fill="#6d6d7d" font-size="9">'
+                 f'{k*dt:.0f}s</text>')
+    for i, name in enumerate(lanes):
+        o.append(f'<text x="8" y="{top+i*row_h+16}" fill="{DIM}" font-size="9">'
+                 f'{html.escape(name)}</text>')
+
+    # 1 段目: シーケンサ状態を区間で塗る
+    ev = res.get("seq_events") or []
+    spans = []
+    for j, e in enumerate(ev):
+        end = ev[j + 1]["tick"] if j + 1 < len(ev) else n_tick
+        spans.append((e["tick"], end, e["to"], e["reason"]))
+    y = top
+    for t0, t1, st, why in spans:
+        x0, x1 = lab_w + t0 * px, lab_w + t1 * px
+        hot = st != "通常運転"
+        o.append(f'<rect x="{x0:.1f}" y="{y+4}" width="{max(1.5,x1-x0):.1f}" height="20" '
+                 f'fill="{LAYER_C["sequencer"]}" opacity="{0.75 if hot else 0.22}"/>')
+        if hot and (x1 - x0) > 26:
+            o.append(f'<text x="{x0+3:.1f}" y="{y+18}" fill="#0e0e14" font-size="8">'
+                     f'{html.escape(st)}</text>')
+    o.append(f'<text x="{lab_w+2}" y="{y+36}" fill="#5f5f70" font-size="7.5">'
+             f'濃い区間＝通常運転から外れている時間（故障対応中）</text>')
+
+    # 2 段目: VLM の助言。狙う区画と修理可否、遅延を刻む
+    y = top + row_h
+    vlm = [c for c in (res.get("calls") or []) if c.get("layer") == "vlm"]
+    for c in vlm:
+        x = lab_w + c["tick"] * px
+        out = c.get("output") or {}
+        seg = out.get("target_seg")
+        col = BLOCK_COLS[seg % len(BLOCK_COLS)] if isinstance(seg, int) else "#c98bff"
+        o.append(f'<line x1="{x:.1f}" y1="{y+4}" x2="{x:.1f}" y2="{y+22}" stroke="{col}" '
+                 f'stroke-width="2"/>')
+        if out.get("repair_ok"):
+            o.append(f'<circle cx="{x:.1f}" cy="{y+26}" r="2.6" fill="{LAYER_C["vlm"]}"/>')
+        lat = float(c.get("latency_s") or 0)
+        if lat > 0.5:                       # 実機推論は遅延そのものが見どころ
+            o.append(f'<rect x="{x:.1f}" y="{y+4}" width="{max(1.0,lat/dt*px):.1f}" '
+                     f'height="18" fill="{LAYER_C["vlm"]}" opacity="0.3"/>')
+    o.append(f'<text x="{lab_w+2}" y="{y+38}" fill="#5f5f70" font-size="7.5">'
+             f'縦棒＝助言が降りた瞬間（色＝狙えと言った列）。● ＝修理してよいと言った。'
+             f'薄い帯＝推論にかかった実時間（この間、盤面は待ってくれない）</text>')
+
+    # 3 段目: 盤面で起きたこと (ジグの摩耗・修理)
+    y = top + 2 * row_h
+    kinds = {"jig_broken": ("#e0483c", "ジグ摩耗"), "repair_ok": ("#3cc87a", "修理成功"),
+             "repair_fail": ("#ffd24d", "修理失敗"), "ball_lost": ("#9a9aa8", "ボール喪失")}
+    for w in (res.get("world_events") or []):
+        k = w.get("kind")
+        if k in kinds:
+            col, _ = kinds[k]
+            x = lab_w + w["tick"] * px
+            o.append(f'<line x1="{x:.1f}" y1="{y+4}" x2="{x:.1f}" y2="{y+24}" '
+                     f'stroke="{col}" stroke-width="2.4"/>')
+    lx = lab_w + 2
+    for col, lab in kinds.values():
+        o.append(f'<line x1="{lx}" y1="{y+34}" x2="{lx+8}" y2="{y+34}" stroke="{col}" '
+                 f'stroke-width="2.4"/>')
+        o.append(f'<text x="{lx+12}" y="{y+37}" fill="#5f5f70" font-size="7.5">{lab}</text>')
+        lx += 12 + len(lab) * 8.4 + 14
+
+    # 4 段目: ブロック消化の累積曲線
+    y = top + 3 * row_h
+    blocks = [w for w in (res.get("world_events") or []) if w.get("kind") == "block"]
+    total = res["score"]["blocks_total"]
+    pts = []
+    for j, w in enumerate(blocks, 1):
+        pts.append(f'{lab_w + w["tick"]*px:.1f},{y+26 - 22*j/max(1,total):.1f}')
+    if pts:
+        o.append(f'<polyline points="{" ".join(pts)}" fill="none" stroke="#77dd77" '
+                 f'stroke-width="1.6"/>')
+    o.append(f'<text x="{lab_w+2}" y="{y+40}" fill="#5f5f70" font-size="7.5">'
+             f'{len(blocks)} / {total} 個。傾きが寝ている区間＝手が止まっていた時間で、'
+             f'上の 3 段のどれかに理由が出ている</text>')
     o.append("</svg>")
     return "\n".join(o)
 
@@ -544,6 +893,16 @@ def pinball_html(res: dict, svg: str,
     p.append("<p class='lede'>上から順に評価され、上のラングが書いたコイルを下のラングが読めます。"
              "だから挙動が完全に読み切れる — ここが AI に置き換えられない理由です。</p>")
     rungs = build_ladder()
+    p.append("<h3 style='font-size:.9rem;margin:.8rem 0 .2rem'>全体像 — 何が入って、"
+             "どのコイルが内部に戻り、どれが外へ出ていくか</h3>")
+    p.append("<p class='lede'>ラング単体を読めても、系全体の依存はこれを見ないと分かりません。"
+             "<span style='color:#7ee787'>緑の破線</span>＝上のラングが書いたコイルが"
+             "下のラングの接点として戻る内部フィードバック。"
+             "<span style='color:#ffd24d'>黄色の破線枠</span>＝どのラングも読まないコイル、"
+             "つまりシーケンサへの出力です。ここがラダーとシーケンサの境界になります。</p>")
+    p.append("<div style='overflow-x:auto'>" + ladder_overview_diagram(rungs) + "</div>")
+
+    p.append("<h3 style='font-size:.9rem;margin:1.1rem 0 .2rem'>ラング 1 本ずつの回路図</h3>")
     p.append("<p class='lede'>左右の縦線が母線。<code>─┤├─</code> が a 接点、"
              "斜線入りの <code>─┤/├─</code> が b 接点 (否定)、右端の <code>─( )─</code> が"
              "出力コイルです。横に並ぶ接点が直列 (AND)、縦に積まれた枝が並列 (OR)。</p>")
@@ -592,8 +951,20 @@ def pinball_html(res: dict, svg: str,
                 p.append("<div style='overflow-x:auto'>"
                          + ladder_diagram(rungs, trace_bits_at(tr, s)) + "</div>")
 
+    # デモ 1 回ぶんの推移と相関
+    p.append("<h2>この 1 回で何が起きたか — 推移と相関</h2>")
+    p.append("<p class='lede'>層ごとに別々の表を眺めても、"
+             "<b>どの助言がどの動きを引き起こしたのか</b>は読めません。"
+             "同じ横軸に 4 段重ねると、VLM の助言 → シーケンサの状態 → 盤面の事故 → "
+             "工程の消化、が縦に揃って読めます。"
+             "ブロック消化の傾きが寝ている区間の理由は、必ず上の 3 段のどれかにあります。</p>")
+    p.append("<div style='overflow-x:auto'>" + demo_timeline_diagram(res) + "</div>")
+
     # シーケンサ
     p.append("<h2>シーケンサの遷移 (事故対応)</h2>")
+    p.append("<p class='lede'>設計上のステートマシンに、この回で実際に通った回数を重ねた図です。"
+             "暗いままの枠と細い矢印は「設計にはあるが今回は通らなかった」経路。</p>")
+    p.append("<div style='overflow-x:auto'>" + seq_flow_diagram(res["seq_events"]) + "</div>")
     p.append("<p class='lede'>VLM は「今なら修理してよい」と<b>助言</b>するだけで、"
              "実際に救済機を出す/止めるの判断は必ずこのステートマシンを通ります。"
              "AI 連動でも安全側の権限は組み込みに残す、という形です。</p>")
