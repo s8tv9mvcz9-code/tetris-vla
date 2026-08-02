@@ -772,22 +772,38 @@ def demo_timeline_diagram(res: dict, width: int = 940) -> str:
     # 2 段目: VLM の助言。狙う区画と修理可否、遅延を刻む
     y = top + row_h
     vlm = [c for c in (res.get("calls") or []) if c.get("layer") == "vlm"]
-    for c in vlm:
+    ep_sec = n_tick * dt                    # このデモの長さ (ゲーム内時間)
+    x_end = lab_w + plot_w
+    lats = [float(c.get("latency_s") or 0) for c in vlm]
+    overrun = max(lats, default=0.0) > ep_sec
+    for c, lat in zip(vlm, lats):
         x = lab_w + c["tick"] * px
         out = c.get("output") or {}
         seg = out.get("target_seg")
         col = BLOCK_COLS[seg % len(BLOCK_COLS)] if isinstance(seg, int) else "#c98bff"
+        if lat > 0.5:
+            # 実機推論では遅延がデモ全長を超える。素直に描くと軸を溢れて
+            # 帯が潰れるので、右端で打ち切って「はみ出した」ことを示す
+            w = lat / dt * px
+            clipped = x + w > x_end
+            o.append(f'<rect x="{x:.1f}" y="{y+4}" width="{max(1.0, min(w, x_end-x)):.1f}" '
+                     f'height="18" fill="{LAYER_C["vlm"]}" opacity="0.28"/>')
+            if clipped:
+                o.append(f'<text x="{x_end-3:.1f}" y="{y+17}" fill="{LAYER_C["vlm"]}" '
+                         f'font-size="9" text-anchor="end">▶</text>')
         o.append(f'<line x1="{x:.1f}" y1="{y+4}" x2="{x:.1f}" y2="{y+22}" stroke="{col}" '
                  f'stroke-width="2"/>')
         if out.get("repair_ok"):
             o.append(f'<circle cx="{x:.1f}" cy="{y+26}" r="2.6" fill="{LAYER_C["vlm"]}"/>')
-        lat = float(c.get("latency_s") or 0)
-        if lat > 0.5:                       # 実機推論は遅延そのものが見どころ
-            o.append(f'<rect x="{x:.1f}" y="{y+4}" width="{max(1.0,lat/dt*px):.1f}" '
-                     f'height="18" fill="{LAYER_C["vlm"]}" opacity="0.3"/>')
-    o.append(f'<text x="{lab_w+2}" y="{y+38}" fill="#5f5f70" font-size="7.5">'
-             f'縦棒＝助言が降りた瞬間（色＝狙えと言った列）。● ＝修理してよいと言った。'
-             f'薄い帯＝推論にかかった実時間（この間、盤面は待ってくれない）</text>')
+    cap = ("縦棒＝助言が降りた瞬間（色＝狙えと言った列）。● ＝修理してよいと言った。"
+           "薄い帯＝推論にかかった実時間（この間、盤面は待ってくれない）")
+    if overrun:
+        med = sorted(lats)[len(lats) // 2]
+        cap = (f"1 回の推論に中央値 {med:.0f} 秒 ＝ このデモ全体 {ep_sec:.0f} 秒の "
+               f"{med/ep_sec:.1f} 倍。▶ は軸をはみ出したことを示す。"
+               f"つまり上位はほぼ何も間に合っていないのに、下位だけで完走している")
+    o.append(f'<text x="{lab_w+2}" y="{y+38}" fill="{"#c98bff" if overrun else "#5f5f70"}" '
+             f'font-size="7.5">{cap}</text>')
 
     # 3 段目: 盤面で起きたこと (ジグの摩耗・修理)
     y = top + 2 * row_h
