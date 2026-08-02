@@ -397,12 +397,17 @@ class VLMStrategist:
     layer = "vlm"
 
     def __init__(self, model: str = "qwen2.5vl:3b", host: str = "http://localhost:11434",
-                 num_predict: int = 44, timeout: float = 600.0,
-                 unload_after: bool = True) -> None:
+                 num_predict: int = 44, timeout: float = 900.0,
+                 unload_after: bool = True, px_per_unit: int = 6) -> None:
         import httpx
 
         self.model, self.host = model, host.rstrip("/")
         self.num_predict, self.unload_after = num_predict, unload_after
+        #: VLM に渡す画像の縮尺。**常駐メモリを直接決める**。
+        #: 8GB 機で 9px/unit (216x288) にすると qwen の常駐が 3.7GB -> 5.6GB に膨らみ、
+        #: 空きメモリ 6% まで落ちてスワップし、1 回の推論が 400 秒に達した。
+        #: 6px/unit (144x192) なら面積は 44%。盤面の粒度は保てる。
+        self.px_per_unit = px_per_unit
         self._client = httpx.Client(timeout=timeout)
         self.name = model
 
@@ -434,7 +439,7 @@ class VLMStrategist:
     def __call__(self, w: PinballWorld) -> tuple[dict, float, str, str, str | None]:
         tel = w.telemetry()
         prompt = self.build_prompt(tel)
-        png = to_png(render_pinball(w))
+        png = to_png(render_pinball(w, px_per_unit=self.px_per_unit))
         t0 = time.perf_counter()
         try:
             r = self._client.post(f"{self.host}/api/generate", json={
@@ -552,7 +557,8 @@ def run_stack(
                 seq=n, layer="vlm", tick=tick, t=round(world.t, 2), latency_s=round(lat, 3),
                 inputs={"telemetry": world.telemetry()}, output=advice, raw=raw,
                 prompt=prompt, error=err,
-                png_b64=base64.b64encode(to_png(render_pinball(world))).decode("ascii"),
+                png_b64=base64.b64encode(to_png(render_pinball(
+                world, px_per_unit=getattr(strategist, "px_per_unit", 9)))).decode("ascii"),
                 note=f"この推論の間に {d} tick 進む = 助言は {d*world.cfg.dt:.2f}秒 古い盤面のもの"))
             if "target_seg" in advice:
                 target_seg = advice["target_seg"]

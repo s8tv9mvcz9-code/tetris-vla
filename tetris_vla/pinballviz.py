@@ -263,11 +263,223 @@ def ladder_timing_chart(trace: dict, width: int = 940, row_h: int = 17,
     return "\n".join(o)
 
 
+# --------------------------------------------------------------------------
+# ラダー図 — 条件式ではなく、母線・接点・コイルをそのまま描く
+# --------------------------------------------------------------------------
+
+_WIRE = "#43435a"        # 非通電の配線
+_HOT = "#7ee787"         # 通電している配線・接点・コイル
+_HOTINK = "#ccffd8"      # 通電中のラベル
+
+
+def _contact_on(name: str, bits: dict[str, bool] | None) -> bool | None:
+    """接点が導通しているか。bits が無ければ None (= 状態を塗らない静的図)。
+
+    `!` 接頭辞が b 接点。判定は Rung.evaluate と同じ規則にそろえてある。
+    """
+    if bits is None:
+        return None
+    return (not bits.get(name[1:], False)) if name.startswith("!") else bits.get(name, False)
+
+
+def trace_bits_at(trace: dict, scan: int) -> dict[str, bool]:
+    """タイムチャートのビット列から、あるスキャン時点の信号状態を切り出す。"""
+    out: dict[str, bool] = {}
+    for name, s in (trace.get("signals") or {}).items():
+        if 0 <= scan < len(s):
+            out[name] = s[scan] == "1"
+    return out
+
+
+def find_scan(trace: dict, signal: str, value: str = "1", start: int = 0) -> int | None:
+    """信号が指定の値になる最初のスキャンを探す (見どころの自動選択用)。"""
+    s = (trace.get("signals") or {}).get(signal)
+    if not s:
+        return None
+    i = s.find(value, start)
+    return None if i < 0 else i
+
+
+def _contact(cx: float, cy: float, name: str, on: bool | None) -> list[str]:
+    """a 接点 ─┤├─ / b 接点 ─┤/├─ を 1 個描く。"""
+    nc = name.startswith("!")
+    col = _WIRE if on is False else (_HOT if on else "#8f8fa6")
+    ink = _HOTINK if on else DIM
+    w = 2.0 if on else 1.4
+    g = [f'<line x1="{cx-8:.1f}" y1="{cy-11}" x2="{cx-8:.1f}" y2="{cy+11}" '
+         f'stroke="{col}" stroke-width="{w}"/>',
+         f'<line x1="{cx+8:.1f}" y1="{cy-11}" x2="{cx+8:.1f}" y2="{cy+11}" '
+         f'stroke="{col}" stroke-width="{w}"/>']
+    if nc:                                   # b 接点は斜線を入れる
+        g.append(f'<line x1="{cx-9:.1f}" y1="{cy+11}" x2="{cx+9:.1f}" y2="{cy-11}" '
+                 f'stroke="{col}" stroke-width="{w}"/>')
+    g.append(f'<text x="{cx:.1f}" y="{cy-16}" fill="{ink}" font-size="9.5" '
+             f'text-anchor="middle">{html.escape(name.lstrip("!"))}</text>')
+    if nc:
+        g.append(f'<text x="{cx:.1f}" y="{cy+23}" fill="{DIM}" font-size="8" '
+                 f'text-anchor="middle">b接点</text>')
+    return g
+
+
+def _coil(cx: float, cy: float, name: str, on: bool | None) -> list[str]:
+    """出力コイル ─( )─ を 1 個描く。"""
+    col = _WIRE if on is False else (_HOT if on else "#8f8fa6")
+    ink = _HOTINK if on else INK
+    w = 2.2 if on else 1.5
+    g = [f'<path d="M {cx-10:.1f},{cy-12} A 15,15 0 0 0 {cx-10:.1f},{cy+12}" fill="none" '
+         f'stroke="{col}" stroke-width="{w}"/>',
+         f'<path d="M {cx+10:.1f},{cy-12} A 15,15 0 0 1 {cx+10:.1f},{cy+12}" fill="none" '
+         f'stroke="{col}" stroke-width="{w}"/>']
+    if on:                                   # 通電中は淡く光らせる
+        g.append(f'<circle cx="{cx:.1f}" cy="{cy}" r="7" fill="{_HOT}" opacity="0.22"/>')
+    g.append(f'<text x="{cx:.1f}" y="{cy-18}" fill="{ink}" font-size="9.5" '
+             f'text-anchor="middle">{html.escape(name)}</text>')
+    return g
+
+
+def ladder_diagram(rungs: Sequence, bits: dict[str, bool] | None = None,
+                   width: int = 940) -> str:
+    """ラダー図そのものを SVG で描く。
+
+    `bits` を渡すと、そのスキャン時点で導通している接点・配線・コイルが緑に光る
+    (実機 PLC のモニタ画面と同じ見え方)。`bits=None` なら状態なしの静的図。
+
+    自己保持 (`seal`) は「コイル自身を並列枝に足す」という Rung.evaluate の
+    実装そのままに、最下段の並列枝として描く。
+    """
+    BR_H, HEAD, PAD, CW = 40, 24, 16, 92
+    rail_l, rail_r = 46, width - 40
+    coil_x = rail_r - 62
+
+    plans = []
+    for r in rungs:
+        brs = [list(b) for b in (r.branches or [])] or [[]]
+        if r.seal:
+            brs.append([r.coil])             # 自己保持 = コイルの a 接点を OR
+        plans.append((r, brs))
+
+    H = PAD + sum(HEAD + len(b) * BR_H + PAD for _, b in plans)
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>',
+         # 母線 (左=電源 / 右=帰線)
+         f'<line x1="{rail_l}" y1="6" x2="{rail_l}" y2="{H-6}" stroke="#7ee787" '
+         f'stroke-width="3" opacity="0.85"/>',
+         f'<line x1="{rail_r}" y1="6" x2="{rail_r}" y2="{H-6}" stroke="#7ee787" '
+         f'stroke-width="3" opacity="0.85"/>']
+
+    y = PAD
+    for r, brs in plans:
+        n = len(brs)
+        # ラング見出し
+        o.append(f'<text x="{rail_l+4}" y="{y+12}" fill="{DIM}" font-size="10">'
+                 f'{html.escape(r.name)}</text>')
+        top = y + HEAD + BR_H / 2
+        node_r = coil_x - 26
+        hot_any = False
+        for i, br in enumerate(brs):
+            by = top + i * BR_H
+            seal_row = r.seal and i == n - 1
+            states = [_contact_on(c, bits) for c in br]
+            # 枝の導通 = 直列 AND (接点ゼロなら素通し)
+            hot = None if bits is None else all(s for s in states)
+            hot_any = hot_any or bool(hot)
+            wc = _HOT if hot else _WIRE
+            ww = 2.0 if hot else 1.2
+            xs = [rail_l + 52 + k * CW for k in range(len(br))]
+            # 母線から最初の接点まで / 接点間 / 最後の接点から結合点まで
+            pts = [rail_l] + [x for x in xs] + [node_r]
+            for k in range(len(pts) - 1):
+                x0 = pts[k] + (8 if 0 < k <= len(xs) else 0)
+                x1 = pts[k + 1] - (8 if k + 1 <= len(xs) else 0)
+                o.append(f'<line x1="{x0:.1f}" y1="{by}" x2="{x1:.1f}" y2="{by}" '
+                         f'stroke="{wc}" stroke-width="{ww}"/>')
+            for x, c, st in zip(xs, br, states):
+                o.extend(_contact(x, by, c, st))
+            if seal_row:
+                o.append(f'<text x="{rail_l+52+len(br)*CW-40:.1f}" y="{by+4}" fill="{DIM}" '
+                         f'font-size="8.5">← 自己保持</text>')
+        if n > 1:                            # 並列枝を縦線で束ねる
+            y0, y1 = top, top + (n - 1) * BR_H
+            for x in (rail_l, node_r):
+                o.append(f'<line x1="{x}" y1="{y0}" x2="{x}" y2="{y1}" '
+                         f'stroke="{_HOT if hot_any else _WIRE}" '
+                         f'stroke-width="{2.0 if hot_any else 1.2}"/>')
+        # 結合点 → コイル → 右母線
+        wc = _HOT if hot_any else _WIRE
+        ww = 2.0 if hot_any else 1.2
+        o.append(f'<line x1="{node_r}" y1="{top}" x2="{coil_x-10:.1f}" y2="{top}" '
+                 f'stroke="{wc}" stroke-width="{ww}"/>')
+        o.append(f'<line x1="{coil_x+10:.1f}" y1="{top}" x2="{rail_r}" y2="{top}" '
+                 f'stroke="{wc}" stroke-width="{ww}"/>')
+        o.extend(_coil(coil_x, top, r.coil, None if bits is None else hot_any))
+        y += HEAD + n * BR_H + PAD
+
+    o.append("</svg>")
+    return "\n".join(o)
+
+
+def layer_stack_diagram(cfg: dict, width: int = 940) -> str:
+    """4 層が別々のクロックで回っていることを 1 枚で見せる。
+
+    横軸を時間 (tick) にとって、各層が「いつ発火するか」を実寸で刻む。
+    ラダーが埋まって見えるのに VLM がスカスカなのが、この構成の本質。
+    """
+    dt = float(cfg.get("dt", 0.02))
+    span = 300                                # 描く tick 数
+    rows = [("ladder", "ラダー", 1, "ゲート開閉・安全インタロック"),
+            ("sequencer", "シーケンサ", 1, "故障検知 → 修理段取り → 復帰"),
+            ("vla", "VLA", int(cfg.get("vla_every", 25) or 25), "パドル連続制御 (1 回で数十手)"),
+            ("vlm", "VLM", int(cfg.get("vlm_every", 150) or 150), "狙う区画の助言 (命令権なし)")]
+    lab_w, row_h, top = 128, 62, 26
+    plot_w = width - lab_w - 20
+    H = top + row_h * len(rows) + 10
+    px = plot_w / span
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>',
+         f'<text x="6" y="15" fill="{DIM}" font-size="10">制御層ごとの発火タイミング '
+         f'(横軸 {span} tick = {span*dt:.0f} 秒)</text>']
+    for k in range(0, span + 1, 50):          # 時間目盛
+        x = lab_w + k * px
+        o.append(f'<line x1="{x:.1f}" y1="{top-6}" x2="{x:.1f}" y2="{H-8}" stroke="#22222d"/>')
+        o.append(f'<text x="{x+3:.1f}" y="{top-10}" fill="#6d6d7d" font-size="9">'
+                 f'{k*dt:.0f}s</text>')
+    for i, (key, name, every, role) in enumerate(rows):
+        y = top + i * row_h
+        c = LAYER_C[key]
+        o.append(f'<text x="6" y="{y+18}" fill="{c}" font-size="11">{html.escape(name)}</text>')
+        o.append(f'<text x="6" y="{y+32}" fill="{DIM}" font-size="8.5">'
+                 f'{"毎 tick" if every <= 1 else f"{every} tick 毎"}</text>')
+        o.append(f'<text x="6" y="{y+45}" fill="#5f5f70" font-size="8">'
+                 f'{html.escape(role[:22])}</text>')
+        o.append(f'<line x1="{lab_w}" y1="{y+26}" x2="{width-20}" y2="{y+26}" '
+                 f'stroke="#1e1e28"/>')
+        # 発火マーク。毎 tick の層は帯、間欠の層は縦棒 + 有効区間
+        if every <= 1:
+            o.append(f'<rect x="{lab_w}" y="{y+16}" width="{plot_w:.1f}" height="20" '
+                     f'fill="{c}" opacity="0.5"/>')
+            o.append(f'<text x="{lab_w+8}" y="{y+30}" fill="#0e0e14" font-size="9">'
+                     f'決定的・毎スキャン評価</text>')
+        else:
+            for k in range(0, span, every):
+                x = lab_w + k * px
+                o.append(f'<rect x="{x:.1f}" y="{y+16}" width="{max(1.5,every*px-2):.1f}" '
+                         f'height="20" fill="{c}" opacity="0.18"/>')
+                o.append(f'<line x1="{x:.1f}" y1="{y+12}" x2="{x:.1f}" y2="{y+40}" '
+                         f'stroke="{c}" stroke-width="2"/>')
+            o.append(f'<text x="{lab_w+4}" y="{y+52}" fill="#5f5f70" font-size="8">'
+                     f'縦棒＝指令が降りてくる瞬間。その間、下位は古い指令で走り続ける</text>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
 def pinball_html(res: dict, svg: str,
                  title: str = "産業制御 × Physical AI — ピンボール／ブロック崩し") -> str:
     sc = res["score"]
     cfg = res.get("config", {})
     calls = res["calls"]
+    dt = float(cfg.get("dt", 0.02))
     p: list[str] = [f"<title>{html.escape(title)}</title>", f"<style>{_CSS}</style>",
                     f"<h1>{html.escape(title)}</h1>"]
     p.append(
@@ -290,6 +502,11 @@ def pinball_html(res: dict, svg: str,
                  f"<h3>{name}</h3><div class='clk'>周期: {clk}</div>"
                  f"<div class='clk'>{role}</div></div>")
     p.append("</div>")
+
+    p.append("<p class='lede'>カードで並べても伝わらないので、<b>実際の発火タイミングを実寸で</b>"
+             "刻んだのが下の図です。ラダーは塗りつぶしに見えるほど回り、VLM は数えるほどしか"
+             "発火しない。この密度差がそのまま「上位の判断が古い」ことの正体です。</p>")
+    p.append("<div style='overflow-x:auto'>" + layer_stack_diagram(cfg) + "</div>")
 
     rows = [
         ("崩したブロック", f"{sc['blocks_broken']}/{sc['blocks_total']}"),
@@ -325,9 +542,15 @@ def pinball_html(res: dict, svg: str,
     p.append("<h2>ラダーロジック (毎スキャン評価される)</h2>")
     p.append("<p class='lede'>上から順に評価され、上のラングが書いたコイルを下のラングが読めます。"
              "だから挙動が完全に読み切れる — ここが AI に置き換えられない理由です。</p>")
+    rungs = build_ladder()
+    p.append("<p class='lede'>左右の縦線が母線。<code>─┤├─</code> が a 接点、"
+             "斜線入りの <code>─┤/├─</code> が b 接点 (否定)、右端の <code>─( )─</code> が"
+             "出力コイルです。横に並ぶ接点が直列 (AND)、縦に積まれた枝が並列 (OR)。</p>")
+    p.append("<div style='overflow-x:auto'>" + ladder_diagram(rungs) + "</div>")
+
     p.append("<table class='full'><tr><th>#</th><th>ラング</th><th>条件</th>"
              "<th>コイル</th><th>意味</th></tr>")
-    for i, r in enumerate(build_ladder(), 1):
+    for i, r in enumerate(rungs, 1):
         cond = " OR ".join("(" + " AND ".join(b) + ")" for b in r.branches)
         if r.seal:
             cond += f" OR <b>{r.coil}</b>(自己保持)"
@@ -346,6 +569,27 @@ def pinball_html(res: dict, svg: str,
                  "帯が立っている区間がその信号 ON。"
                  "「なぜあの瞬間に修理許可が出た/落ちたのか」を後から追えます。</p>")
         p.append("<div style='overflow-x:auto'>" + ladder_timing_chart(tr) + "</div>")
+
+        # タイムチャートで見つけた「見どころ」のスキャンを、ラダー図に通電表示で焼き直す
+        marks = []
+        for sig_name, why in (("repair_permit", "修理許可が立った瞬間"),
+                              ("drone_active", "救済機が飛んでいる最中"),
+                              ("ball_in_danger", "ボールが危険域に入った瞬間")):
+            s = find_scan(tr, sig_name)
+            if s is not None:
+                marks.append((s, sig_name, why))
+        if marks:
+            p.append("<h2>そのときラダーはどう通電していたか</h2>")
+            p.append("<p class='lede'>タイムチャートは「いつ」しか分かりません。"
+                     "同じ瞬間をラダー図に焼き直すと <b>どの経路を電気が通ったか</b> が見えます。"
+                     "<span style='color:#7ee787'>緑＝通電</span>、"
+                     "暗い線＝遮断。b 接点が効いて落ちている経路に注目してください。</p>")
+            for s, sig_name, why in marks:
+                p.append(f"<h3 style='font-size:.86rem;margin:.9rem 0 .2rem'>"
+                         f"スキャン {s} ({s*dt:.1f}s) — {html.escape(why)} "
+                         f"<code style='opacity:.7'>{html.escape(sig_name)}</code></h3>")
+                p.append("<div style='overflow-x:auto'>"
+                         + ladder_diagram(rungs, trace_bits_at(tr, s)) + "</div>")
 
     # シーケンサ
     p.append("<h2>シーケンサの遷移 (事故対応)</h2>")
