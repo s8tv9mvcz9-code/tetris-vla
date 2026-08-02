@@ -365,15 +365,18 @@ def test_execution_precision_pays_off_only_when_the_goal_is_fresh() -> None:
     assert stale_gap < fresh_gap / 2, (fresh_gap, stale_gap)
 
 
-def test_this_task_needs_many_seeds() -> None:
-    """ボールがカオス要素なので分散が大きい。1 seed 比較への歯止めとして仕様化する。
+def test_the_task_is_a_usable_instrument() -> None:
+    """**分散が小さいこと**を仕様として固定する。
 
-    教材としては良いが、**計測器としては 10 seed 以上必要**。
+    ジグを 1 列に並べ替えて狙いが効くようにするまで、この題材は変動係数が
+    15% を超えていて、腕前の差が測れなかった。並べ替え後は 3% 前後に落ちる。
+    ここが再び悪化したら、比較実験の結論がすべて信用できなくなるので落とす。
     """
     import statistics
 
     scores = _sweep(0.9, 60, n=8)
-    assert statistics.stdev(scores) > 0.15 * statistics.fmean(scores), scores
+    cv = statistics.stdev(scores) / statistics.fmean(scores)
+    assert cv < 0.08, (f"変動係数 {cv:.1%} — 題材が再びカオス化している", scores)
 
 
 def test_landing_prediction_is_sane() -> None:
