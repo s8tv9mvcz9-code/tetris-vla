@@ -397,8 +397,9 @@ def ladder_diagram(rungs: Sequence, bits: dict[str, bool] | None = None,
             for x, c, st in zip(xs, br, states):
                 o.extend(_contact(x, by, c, st))
             if seal_row:
-                o.append(f'<text x="{rail_l+52+len(br)*CW-40:.1f}" y="{by+4}" fill="{DIM}" '
-                         f'font-size="8.5">← 自己保持</text>')
+                o.append(f'<text x="{(xs[-1] if xs else rail_l)+24:.1f}" y="{by+17}" '
+                         f'fill="{DIM}" font-size="8.5">← 自己保持 '
+                         f'(コイル自身を OR に足してラッチする)</text>')
         if n > 1:                            # 並列枝を縦線で束ねる
             y0, y1 = top, top + (n - 1) * BR_H
             for x in (rail_l, node_r):
