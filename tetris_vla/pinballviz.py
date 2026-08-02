@@ -271,43 +271,46 @@ def ladder_timing_chart(trace: dict, width: int = 940, row_h: int = 17,
     inputs = trace.get("inputs", [])
     coils = trace.get("coils", [])
     order = [x for x in inputs if x in sig] + [x for x in coils if x in sig]
+    row_h = max(row_h, 26)          # 波形の立ち上がりが見える高さを確保する
     label_w = 150
     plot_w = width - label_w - 10
     cols = len(range(0, n, step))
     px_per = plot_w / max(1, cols)
-    H = row_h * len(order) + 26
+    H = row_h * len(order) + 30
     o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
          f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
          f'<rect width="{width}" height="{H}" fill="#0e0e14"/>']
     dt = trace.get("dt", 0.02)
     for k in range(0, cols, max(1, cols // 8)):
         x = label_w + k * px_per
-        o.append(f'<line x1="{x:.1f}" y1="16" x2="{x:.1f}" y2="{H-6}" stroke="#25252f"/>')
-        o.append(f'<text x="{x+2:.1f}" y="12" fill="#7a7a88" font-size="9">'
+        o.append(f'<line x1="{x:.1f}" y1="18" x2="{x:.1f}" y2="{H-6}" stroke="#25252f"/>')
+        o.append(f'<text x="{x+2:.1f}" y="13" fill="#7a7a88" font-size="9">'
                  f'{k*step*dt:.0f}s</text>')
     for i, name in enumerate(order):
-        y = 22 + i * row_h
+        y = 24 + i * row_h
         is_coil = name in coils
         col = "#7ee787" if is_coil else "#5ac8fa"
-        o.append(f'<text x="4" y="{y+10}" fill="{col}" font-size="10">'
+        lo, hi = y + row_h - 8, y + 2        # 0 の高さ / 1 の高さ
+        o.append(f'<text x="4" y="{lo}" fill="{col}" font-size="10">'
                  f'{"◆" if is_coil else "○"} {html.escape(name)}</text>')
-        o.append(f'<line x1="{label_w}" y1="{y+row_h-2}" x2="{width-6}" y2="{y+row_h-2}" '
+        o.append(f'<line x1="{label_w}" y1="{lo}" x2="{width-6}" y2="{lo}" '
                  f'stroke="#1c1c25"/>')
+        # 折れ線として描く。段差 (立ち上がり / 立ち下がり) を縦線で繋ぐので、
+        # 帯で塗るより「いつ変化したか」が読みやすい
         bits = sig[name]
-        run_start = None
+        pts: list[str] = []
+        prev = None
         for k, idx in enumerate(range(0, n, step)):
             on = bits[idx] == "1"
-            if on and run_start is None:
-                run_start = k
-            elif not on and run_start is not None:
-                x0 = label_w + run_start * px_per
-                o.append(f'<rect x="{x0:.1f}" y="{y+2}" width="{max(0.6,(k-run_start)*px_per):.1f}" '
-                         f'height="{row_h-6}" fill="{col}" opacity="0.85"/>')
-                run_start = None
-        if run_start is not None:
-            x0 = label_w + run_start * px_per
-            o.append(f'<rect x="{x0:.1f}" y="{y+2}" width="{max(0.6,(cols-run_start)*px_per):.1f}" '
-                     f'height="{row_h-6}" fill="{col}" opacity="0.85"/>')
+            x = label_w + k * px_per
+            lvl = hi if on else lo
+            if prev is not None and on != prev:
+                pts.append(f"{x:.1f},{hi if not on else lo:.1f}")   # 段差の縦線
+            pts.append(f"{x:.1f},{lvl:.1f}")
+            prev = on
+        if pts:
+            o.append(f'<polyline points="{" ".join(pts)}" fill="none" stroke="{col}" '
+                     f'stroke-width="1.6" stroke-linejoin="miter"/>')
     o.append("</svg>")
     return "\n".join(o)
 
@@ -476,7 +479,10 @@ def layer_stack_diagram(cfg: dict, width: int = 940) -> str:
     ラダーが埋まって見えるのに VLM がスカスカなのが、この構成の本質。
     """
     dt = float(cfg.get("dt", 0.02))
-    span = 300                                # 描く tick 数
+    # 描く tick 数。いちばん遅い層のパルスが最低 3 本入る幅にしないと、
+    # その層だけ 1 本しか出ず「どれくらい間欠か」が読めない
+    slowest = max(int(cfg.get("vla_every", 25) or 25), int(cfg.get("vlm_every", 150) or 150))
+    span = max(300, slowest * 3)
     rows = [("ladder", "ラダー", 1, "ゲート開閉・安全インタロック"),
             ("sequencer", "シーケンサ", 1, "故障検知 → 修理段取り → 復帰"),
             ("vla", "VLA", int(cfg.get("vla_every", 25) or 25), "パドル連続制御 (1 回で数十手)"),
@@ -506,23 +512,30 @@ def layer_stack_diagram(cfg: dict, width: int = 940) -> str:
                  f'{html.escape(role[:22])}</text>')
         o.append(f'<line x1="{lab_w}" y1="{y+26}" x2="{width-20}" y2="{y+26}" '
                  f'stroke="#1e1e28"/>')
-        # 発火マーク。毎 tick の層は帯、間欠の層は縦棒 + 有効区間
+        # 発火をパルス波形 (折れ線) で描く。lo が待機、hi が発火の瞬間。
+        # 毎 tick の層は隙間なく発火するので hi に張り付いた線になり、
+        # 間欠の層は歯抜けのパルス列になる。同じ描き方なので密度差が直に比べられる。
+        lo, hi = y + 38, y + 14
+        o.append(f'<line x1="{lab_w}" y1="{lo}" x2="{width-20}" y2="{lo}" stroke="#1c1c25"/>')
+        pts: list[str] = []
         if every <= 1:
-            o.append(f'<rect x="{lab_w}" y="{y+16}" width="{plot_w:.1f}" height="20" '
-                     f'fill="{c}" opacity="0.5"/>')
-            o.append(f'<text x="{lab_w+8}" y="{y+30}" fill="#0e0e14" font-size="9">'
+            pts = [f"{lab_w},{hi}", f"{lab_w+plot_w:.1f},{hi}"]
+            o.append(f'<text x="{lab_w+8}" y="{y+10}" fill="{c}" font-size="8">'
                      f'途切れなく評価され続ける — 隙間がない</text>')
         else:
+            wid = max(1.2, min(every * px * 0.18, 6))   # パルス幅は見える下限で頭打ち
+            pts.append(f"{lab_w},{lo}")
             for k in range(0, span, every):
                 x = lab_w + k * px
-                o.append(f'<rect x="{x:.1f}" y="{y+16}" width="{max(1.5,every*px-2):.1f}" '
-                         f'height="20" fill="{c}" opacity="0.18"/>')
-                o.append(f'<line x1="{x:.1f}" y1="{y+12}" x2="{x:.1f}" y2="{y+40}" '
-                         f'stroke="{c}" stroke-width="2"/>')
-            if i == len(rows) - 1:
-                o.append(f'<text x="{lab_w+4}" y="{y+52}" fill="#5f5f70" font-size="8">'
-                         f'縦棒＝指令が降りてくる瞬間。その間、下位は古い指令のまま走り続ける'
-                         f'（＝上位の判断は必ず過去の盤面に対する答え）</text>')
+                pts += [f"{x:.1f},{lo}", f"{x:.1f},{hi}",
+                        f"{x+wid:.1f},{hi}", f"{x+wid:.1f},{lo}"]
+            pts.append(f"{lab_w+plot_w:.1f},{lo}")
+        o.append(f'<polyline points="{" ".join(pts)}" fill="none" stroke="{c}" '
+                 f'stroke-width="1.6"/>')
+        if every > 1 and i == len(rows) - 1:
+            o.append(f'<text x="{lab_w+4}" y="{y+52}" fill="#5f5f70" font-size="8">'
+                     f'パルスが立つ瞬間だけ指令が降りてくる。谷の間、下位は'
+                     f'古い指令のまま走り続ける（＝上位の判断は必ず過去の盤面への答え）</text>')
     o.append("</svg>")
     return "\n".join(o)
 
@@ -1049,6 +1062,91 @@ def st_sequencer_code() -> str:
     return "\n".join(L)
 
 
+def takt_chart(res: dict, width: int = 940) -> str:
+    """工程が回る拍 (タクト) と、各層の判断周期を同じ時間軸に重ねる。
+
+    ジグを 1 列に並べたことで、この盤面は「一定の拍で戻ってくる球を、
+    毎回どのレーンへ返すか選ぶ」形になった。狙う先を変えても飛行時間は
+    ほとんど変わらない (実測 58〜66 tick) ので、**拍は固定で、選ぶのはレーンだけ**。
+
+    製造ラインのタクトタイムと同じ構図なので、「1 タクトの間に判断が間に合うか」
+    がそのまま層の設計条件になる。
+    """
+    cfg = res.get("config", {})
+    dt = float(cfg.get("dt", 0.02))
+    frames = res.get("frames") or []
+    n_tick = max([f["tick"] for f in frames] or [1])
+    hits = [(e["tick"], e["seg"]) for e in (res.get("world_events") or [])
+            if e.get("kind") == "block"]
+    hits += [(e["tick"], e["jid"]) for e in (res.get("world_events") or [])
+             if e.get("kind") == "fit_ng"]
+    hits.sort()
+    if len(hits) < 2:
+        return ""
+    gaps = [b[0] - a[0] for a, b in zip(hits, hits[1:]) if 0 < b[0] - a[0] < 400]
+    takt = (sorted(gaps)[len(gaps) // 2] if gaps else 60)
+
+    lab_w, lane_h, top = 96, 26, 54
+    plot_w = width - lab_w - 16
+    show = min(n_tick, takt * 26)              # 26 拍ぶんだけ描くと粒が見える
+    px = plot_w / max(1, show)
+    H = top + lane_h * N_SEG + 96
+    o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {H}" width="{width}" '
+         f'height="{H}" font-family="ui-monospace,Menlo,monospace">',
+         f'<rect width="{width}" height="{H}" fill="#0e0e14"/>',
+         f'<text x="8" y="16" fill="{INK}" font-size="10.5">'
+         f'工程のタクト — 一定の拍で戻る球を、毎拍どのレーンへ返すか</text>',
+         f'<text x="8" y="30" fill="{DIM}" font-size="8.5">'
+         f'実測タクト {takt} tick = {takt*dt:.2f} 秒／拍。'
+         f'狙う先を変えても飛行時間はほぼ変わらないので、拍は固定でレーンだけが選択になる</text>']
+
+    for k in range(0, show + 1, takt):          # 拍の目盛
+        x = lab_w + k * px
+        o.append(f'<line x1="{x:.1f}" y1="{top-8}" x2="{x:.1f}" y2="{top+lane_h*N_SEG}" '
+                 f'stroke="#22222d"/>')
+    for lane in range(N_SEG):
+        y = top + lane * lane_h
+        c = BLOCK_COLS[lane % len(BLOCK_COLS)]
+        o.append(f'<text x="8" y="{y+16}" fill="{c}" font-size="9.5">レーン{lane}</text>')
+        o.append(f'<rect x="{lab_w}" y="{y+3}" width="{plot_w:.1f}" height="{lane_h-6}" '
+                 f'fill="{c}" opacity="0.04"/>')
+    ngs = {(e["tick"], e["jid"]) for e in (res.get("world_events") or [])
+           if e.get("kind") == "fit_ng"}
+    for t, lane in hits:
+        if t > show:
+            continue
+        x, y = lab_w + t * px, top + lane * lane_h
+        c = BLOCK_COLS[lane % len(BLOCK_COLS)]
+        if (t, lane) in ngs:                     # 叩いたが工程は進まなかった
+            o.append(f'<rect x="{x-3:.1f}" y="{y+7}" width="6" height="{lane_h-14}" '
+                     f'fill="none" stroke="{c}" stroke-width="1.4"/>')
+        else:
+            o.append(f'<rect x="{x-3:.1f}" y="{y+7}" width="6" height="{lane_h-14}" '
+                     f'rx="2" fill="{c}"/>')
+
+    # 各層が「1 タクトあたり何回判断できるか」
+    y0 = top + lane_h * N_SEG + 20
+    o.append(f'<text x="8" y="{y0}" fill="{DIM}" font-size="9">1 タクトあたりの判断回数</text>')
+    layers = [("ladder", "ラダー", 1), ("vla", "VLA", int(cfg.get("vla_every", 25) or 25)),
+              ("vlm", "VLM", int(cfg.get("vlm_every", 150) or 150))]
+    for i, (key, name, every) in enumerate(layers):
+        y = y0 + 16 + i * 15
+        per = takt / max(1, every)
+        c = LAYER_C[key]
+        o.append(f'<text x="16" y="{y}" fill="{c}" font-size="9">{name}</text>')
+        w_bar = min(plot_w * 0.5, max(2.0, per * 6))
+        o.append(f'<rect x="{lab_w}" y="{y-8}" width="{w_bar:.1f}" height="9" '
+                 f'fill="{c}" opacity="0.55"/>')
+        txt = (f"{per:.0f} 回" if per >= 1 else f"{1/per:.1f} タクトに 1 回")
+        o.append(f'<text x="{lab_w+w_bar+6:.1f}" y="{y}" fill="{DIM}" font-size="8.5">'
+                 f'{txt}</text>')
+    o.append(f'<text x="8" y="{H-10}" fill="#5f5f70" font-size="8">'
+             f'塗りつぶし＝工程が 1 回進んだ、白抜き＝叩いたが嵌合不良で進まなかった。'
+             f'タクトが固定なので、判断が 1 タクトに 1 回入らない層は「次の拍」に間に合わない</text>')
+    o.append("</svg>")
+    return "\n".join(o)
+
+
 def pinball_html(res: dict, svg: str,
                  title: str = "産業制御 × Physical AI — ピンボール／ブロック崩し") -> str:
     sc = res["score"]
@@ -1189,6 +1287,17 @@ def pinball_html(res: dict, svg: str,
                          f"<code style='opacity:.7'>{html.escape(sig_name)}</code></h3>")
                 p.append("<div style='overflow-x:auto'>"
                          + ladder_diagram(rungs, trace_bits_at(tr, s)) + "</div>")
+
+    # タクト — この盤面が持つ拍
+    takt = takt_chart(res)
+    if takt:
+        p.append("<h2>工程のタクト</h2>")
+        p.append("<p class='lede'>ジグが 1 列に並んでいるので、"
+                 "球はほぼ一定の飛行時間で戻ってきます。狙う先を変えても飛行時間は変わらない — "
+                 "つまり<b>拍は固定で、毎拍の選択はレーンだけ</b>。"
+                 "製造ラインのタクトタイムと同じ形なので、"
+                 "「1 タクトの間に判断が間に合うか」がそのまま層の設計条件になります。</p>")
+        p.append("<div style='overflow-x:auto'>" + takt + "</div>")
 
     # デモ 1 回ぶんの推移と相関
     p.append("<h2>この 1 回で何が起きたか — 推移と相関</h2>")

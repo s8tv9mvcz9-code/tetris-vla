@@ -60,9 +60,9 @@ padding:.05rem .4rem;margin-right:.4rem;vertical-align:.08em}
 
 NAV = ('<div class="nav"><a href="index.html">← 目次</a>'
        '<a href="README.html">README</a>'
-       '<a href="physical-ai-realtime.html">Physical AI 実測</a>'
+       '<a href="physical-ai-realtime.html">リアルタイム制約</a>'
        '<a href="design-qa.html">設計 Q&amp;A</a>'
-       '<a href="results/pinball_slow_vlm.html">実機 qwen の走行</a></div>')
+       '<a href="results/pinball_slow_vlm.html">走行の記録</a></div>')
 
 #: (元ファイル, 出力名, 説明)。存在しないものは黙って飛ばす
 DOCS = [
@@ -70,7 +70,6 @@ DOCS = [
     ("docs/physical-ai-realtime.md", "physical-ai-realtime.html",
      "Physical AI のリアルタイム運用課題（実測）"),
     ("docs/design-qa.md", "design-qa.html", "設計 Q&A — なぜこの題材にしたか"),
-    ("AGENT-NOTES.md", "AGENT-NOTES.html", "エージェント間の引き継ぎメモ"),
     ("results/pinball_matrix.md", "pinball_matrix.html", "パドル制御層の差し替え比較"),
     ("results/benchmark.md", "benchmark.html", "マシンベンチマーク"),
     ("results/flight_bench.md", "flight_bench.html", "パラシュート降下ベンチ"),
