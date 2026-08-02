@@ -322,16 +322,31 @@ def test_stack_is_deterministic() -> None:
     assert a == b
 
 
-def _sweep(skill: float, every: int, n: int = 8) -> list[float]:
+def _sweep(skill: float, every: int, n: int = 8, fit_tolerance: float = 9.9) -> list[float]:
+    """既定では嵌合摩耗を切って (公差を事実上無限に) 測る。
+
+    腕前と指令の新鮮さだけを見たいときに摩耗が混ざると、
+    「当てたのに工程が進まない」分だけ腕前の効果が薄まってしまうため。
+    """
     out = []
     for s in range(n):
-        w = PinballWorld(PinballConfig(seed=s, max_ticks=5000))
+        w = PinballWorld(PinballConfig(seed=s, max_ticks=5000,
+                                       fit_tolerance=fit_tolerance))
         r = run_stack(w, MockVLAPaddle(skill=skill, seed=s), HeuristicStrategist(),
                       StackConfig(vlm_every=every, verbose=False))
         out.append(r["score"]["score"])
     return out
 
 
+@pytest.mark.xfail(reason=(
+    "この主張は n=8 でしか確かめておらず、20 seed で測り直すと再現しない。"
+    "旧仕様 (ゲートが死んでいた頃) ですら fresh_gap=16.4±64 で、"
+    "要求している 150 に遠く及ばない。seed 0〜7 がたまたまそう並んでいただけ。"
+    "皮肉なことに test_this_task_needs_many_seeds が『10 seed 以上必要』と"
+    "書いているのに、この検証自体が n=8 だった。"
+    "→ 主張を捨てるか、題材を作り直して効果量を出すかは人間の判断待ち。"
+    "詳細は test_the_freshness_claim_does_not_survive_more_seeds を参照。"),
+    strict=False)
 def test_execution_precision_pays_off_only_when_the_goal_is_fresh() -> None:
     """**精密な実行は、上位の指令が新鮮なときだけ価値がある。**
 
@@ -456,3 +471,57 @@ def test_st_is_generated_from_the_implementation_not_hardcoded() -> None:
     # 自己保持は末尾の OR で表現される
     seal = [r for r in build_ladder() if r.seal][0]
     assert f"OR {seal.coil};" in lad
+
+
+def test_tool_wear_caps_what_precision_can_buy() -> None:
+    """**治具が摩耗すると、腕前で買えるものに上限がつく。**
+
+    嵌合公差を入れる前と後で、同じ「腕前の差」がスコアに換算される量を比べる。
+    当てても公差を外していれば工程は進まないので、精密に狙えることの価値は
+    道具の状態に頭を押さえられる。現場で「良いオペレータを入れても
+    治具が終わっていれば数字は出ない」と言われるのと同じ構図。
+    """
+    import statistics
+
+    def gap(tol: float) -> float:
+        return (statistics.fmean(_sweep(0.95, 60, fit_tolerance=tol))
+                - statistics.fmean(_sweep(0.2, 60, fit_tolerance=tol)))
+
+    no_wear = gap(9.9)      # 摩耗なし
+    with_wear = gap(0.8)    # 既定の公差
+    assert no_wear > with_wear, (no_wear, with_wear)
+    assert with_wear > 0, "摩耗があっても腕前の向きは正のままであるべき"
+
+
+@pytest.mark.slow
+def test_the_freshness_claim_does_not_survive_more_seeds() -> None:
+    """**「指令が新鮮なときだけ腕前が効く」は、seed を増やすと消える。**
+
+    この題材はボールがカオス要素なので分散が大きい。腕前 0.95 と 0.2 の差を
+    20 seed で測ると、標準誤差が ±60 前後あり、効果量 (16〜59) がその中に埋もれる。
+
+    元の検証は n=8 だった。seed 0〜7 がたまたま並んだだけで、
+    同じ条件 (ゲートが死んでいた旧仕様) でも n=20 では fresh_gap=16.4 しか出ない。
+
+    ここでは「有意差が無い」ことを仕様として固定する。効果量を主張したいなら、
+    題材側で分散を下げる (ボールを 1 個にする / 面を長くする) 必要がある。
+    """
+    import statistics
+
+    def arm(skill: float, every: int, n: int = 20) -> list[float]:
+        out = []
+        for s in range(n):
+            w = PinballWorld(PinballConfig(seed=s, max_ticks=5000, fit_tolerance=9.9,
+                                           stall_ticks=99999))   # 旧仕様を再現
+            r = run_stack(w, MockVLAPaddle(skill=skill, seed=s), HeuristicStrategist(),
+                          StackConfig(vlm_every=every, verbose=False))
+            out.append(r["score"]["score"])
+        return out
+
+    good, bad = arm(0.95, 60), arm(0.2, 60)
+    gap = statistics.fmean(good) - statistics.fmean(bad)
+    se = (statistics.pstdev(good) ** 2 / len(good)
+          + statistics.pstdev(bad) ** 2 / len(bad)) ** 0.5
+    assert abs(gap) < 2 * se, (
+        f"gap={gap:.1f} se={se:.1f} — 有意差が出た。題材の分散が下がったなら"
+        "この所見と docs/design-qa.md を見直すこと")

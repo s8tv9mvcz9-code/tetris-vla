@@ -492,8 +492,16 @@ class HeuristicStrategist:
         left = [int(w.blocks[:, c].sum()) for c in range(N_SEG)]
         cand = [c for c in range(N_SEG) if left[c] > 0 and not w.jigs[c].broken]
         if cand:
-            seg = min(cand, key=lambda c: (w.broken_per_col[c], -left[c]))
-            why = "未消化かつ健全な工程"
+            # 嵌合不良が出ている治具は、公差を外し始めた = 寿命の終盤にいる。
+            # クリアランスそのものは見えないが、不良の回数だけは観測できるので、
+            # **それを唯一の先行指標として使う**。壊れてから直すより、
+            # 不良が出た治具を避けて他へ振った方が全体の工程が進む。
+            def key(c: int) -> tuple:
+                return (w.jigs[c].fit_ng, w.broken_per_col[c], -left[c])
+
+            seg = min(cand, key=key)
+            ng = w.jigs[seg].fit_ng
+            why = "未消化かつ健全な工程" if ng == 0 else f"不良の少ない工程 (NG {ng})"
         else:
             seg = next((c for c in range(N_SEG) if left[c] > 0), 0)
             why = "健全な工程がない"

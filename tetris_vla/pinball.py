@@ -94,11 +94,23 @@ class Jig:
     #: 答え合わせ (jig_truth) 専用。max_durability を答えとして出すと全ジグ同じ定数に
     #: なってしまい、「壊れて初めて答えが分かる」という主題そのものが消える。
     initial_durability: int = 0
+    #: 嵌合クリアランス。**隠れ状態**。打つたびに wear_per_hit ずつ広がる。
+    #: 公差 (cfg.fit_tolerance) を超えると嵌合不良になり、挿入はできても工程が進まない。
+    clearance: float = 0.0
+    wear_per_hit: float = 0.0    # 個体差。隠れ状態
+    #: 嵌合不良の回数。**これは観測できる** (検査で分かる) ので、
+    #: 素通り (完全故障) より手前で劣化に気づくための唯一の手掛かりになる。
+    fit_ng: int = 0
 
     def telemetry(self) -> dict:
-        """外部 (シーケンサ / VLM / VLA) に見せてよい情報だけ。"""
+        """外部 (シーケンサ / VLM / VLA) に見せてよい情報だけ。
+
+        クリアランスと摩耗率は隠したまま、**その結果である嵌合不良の回数だけ**を
+        見せる。現場で言えば「公差は測っていないが、不良は数えている」状態。
+        """
         return {"jid": self.jid, "x": round(self.x, 1), "y": round(self.y, 1),
-                "hits": self.hits, "broken": self.broken, "repairing": self.repairing}
+                "hits": self.hits, "fit_ng": self.fit_ng,
+                "broken": self.broken, "repairing": self.repairing}
 
 
 @dataclass
@@ -346,6 +358,10 @@ class PinballConfig:
     n_balls: int = 2              # カオス要素であり、並行して回る工程でもある
     n_lives: int = 4              # 落としても復帰する回数。面を長く保って修理劇を見せる
     jig_durability: tuple[int, int] = (4, 9)   # 隠れ耐久度の範囲
+    #: 嵌合公差。クリアランスがこれを超えると嵌合不良 (挿入はできるが工程が進まない)。
+    #: クリアランスは寿命いっぱいで 1.0 に達するよう正規化してあるので、
+    #: 0.65 なら「寿命の終盤 35% は不良を出しながら回る」という意味になる。
+    fit_tolerance: float = 0.8
     #: 滞留タイマ。**「この tick 数だけ工程が進まなければ滞留」** と読む。
     #:
     #: 以前は「全球が y>=14 に居続けた tick 数」を数えて 220 (4.4秒) と比べていたが、
@@ -398,8 +414,12 @@ class PinballWorld:
         jigs = []
         for i, (x, y) in enumerate(self.JIG_SPOTS[:N_SEG]):
             d = self.rng.randint(lo, hi)      # 個体ごとの真の寿命。これが隠れ状態
+            # 摩耗率も個体差。寿命 d 回でクリアランスが 1.0 に達する速さを基準に、
+            # ±20% ばらつかせる。同じ打数でも先に不良を出す個体が現れる
+            wear = (1.0 / d) * self.rng.uniform(0.8, 1.2)
             jigs.append(Jig(jid=i, x=x, y=y, r=1.1, durability=d,
-                            max_durability=hi, initial_durability=d))
+                            max_durability=hi, initial_durability=d,
+                            wear_per_hit=wear))
         return jigs
 
     # -- 観測 (外部に見せてよいもの) --------------------------------------
@@ -460,8 +480,16 @@ class PinballWorld:
                     b.x, b.y = j.x + nx * (j.r + BALL_R + 1e-3), j.y + ny * (j.r + BALL_R + 1e-3)
                     j.hits += 1
                     j.durability -= 1
-                    # **工程を 1 回こなす**: ジグ j に当たったら列 j が 1 個崩れる
-                    self._break_block(j.jid)
+                    j.clearance += j.wear_per_hit      # 打つたびに嵌合が緩む
+                    if j.clearance > self.cfg.fit_tolerance:
+                        # **嵌合不良**。挿入はしたが公差を外れているので工程は進まない。
+                        # 素通り (完全故障) の手前で、外から観測できる劣化の兆候になる。
+                        j.fit_ng += 1
+                        self.events.append({"tick": self.tick, "kind": "fit_ng",
+                                            "jid": j.jid, "hits": j.hits})
+                    else:
+                        # **工程を 1 回こなす**: ジグ j に当たったら列 j が 1 個崩れる
+                        self._break_block(j.jid)
                     if j.durability <= 0 and not j.broken:
                         j.broken = True
                         self.events.append({"tick": self.tick, "kind": "jig_broken",
@@ -513,6 +541,8 @@ class PinballWorld:
             # 整備は「元の寿命に戻す」。設定上限まで回復させると、耐久 6 の個体が
             # 修理後 9 になり、直すたびに新品より強くなってしまう
             tgt.durability = tgt.initial_durability
+            tgt.clearance = 0.0        # 整備で嵌合も出荷時に戻る
+            tgt.fit_ng = 0
             tgt.broken = False
             tgt.hits = 0
             d.active = False
