@@ -529,3 +529,63 @@ def test_the_freshness_claim_does_not_survive_more_seeds() -> None:
     assert abs(gap) < 2 * se, (
         f"gap={gap:.1f} se={se:.1f} — 有意差が出た。題材の分散が下がったなら"
         "この所見と docs/design-qa.md を見直すこと")
+
+
+# --- 吸収射出 -------------------------------------------------------------
+
+
+def test_kicker_only_catches_balls_through_the_saucer() -> None:
+    """受け皿を外れた球は捕まえない。
+
+    盤面全幅で捕まえると誰が撃っても狙いどおり入るので、無作為なパドルでも
+    満点が出て腕前が消える。「隙間を抜いて受け皿へ通す」ことを技術として残す。
+    """
+    w = PinballWorld(PinballConfig(seed=1))
+    k = w.kicker
+    on = Ball(x=k.cx, y=k.y - 0.2, vx=0.0, vy=-8.0)          # 受け皿の真上
+    assert w._kicker_capture(on) is True and k.loaded is True
+
+    w2 = PinballWorld(PinballConfig(seed=1))
+    off = Ball(x=w2.kicker.cx + w2.kicker.half_w + 1.0, y=w2.kicker.y - 0.2, vx=0.0, vy=-8.0)
+    assert w2._kicker_capture(off) is False and w2.kicker.loaded is False
+
+
+def test_kicker_fires_at_the_commanded_process() -> None:
+    """射出は上位が指した工程へ向く。弾道の到達範囲に縛られない経路になる。"""
+    w = PinballWorld(PinballConfig(seed=1))
+    k = w.kicker
+    k.loaded, k.x, k.timer = True, k.cx, 1
+    w.balls = []
+    w._kicker_fire(0)                                         # 左端の工程を指定
+    assert not k.loaded and k.shots == 1 and len(w.balls) == 1
+    b = w.balls[0]
+    assert b.vx < 0, "左の工程を指したのに左へ向いていない"
+    assert b.vy > 0, "下向きに撃ち出していない"
+
+    w2 = PinballWorld(PinballConfig(seed=1))
+    w2.kicker.loaded, w2.kicker.x, w2.kicker.timer = True, w2.kicker.cx, 1
+    w2.balls = []
+    w2._kicker_fire(N_SEG - 1)
+    assert w2.balls[0].vx > 0, "右の工程を指したのに右へ向いていない"
+
+
+def test_kicker_holds_for_the_dwell_before_firing() -> None:
+    """段取り時間の間は保持する。保持中その球は工程を回せない (捕獲の代償)。"""
+    w = PinballWorld(PinballConfig(seed=1))
+    k = w.kicker
+    k.loaded, k.x, k.timer = True, k.cx, 3
+    w.balls = []
+    for _ in range(2):
+        w._kicker_fire(2)
+        assert k.loaded is True and not w.balls, "段取り中に撃ってはいけない"
+    w._kicker_fire(2)
+    assert not k.loaded and len(w.balls) == 1
+
+
+def test_ladder_gates_the_kicker_while_the_drone_flies() -> None:
+    """救済機が飛んでいる間は射出しない (巻き込み防止のインタロック)。"""
+    plc = LadderPLC(build_ladder())
+    bits = plc.scan({"kicker_loaded": True, "drone_active": False})
+    assert bits["kick_ok"] is True
+    bits = plc.scan({"kicker_loaded": True, "drone_active": True})
+    assert bits["kick_ok"] is False

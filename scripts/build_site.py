@@ -62,6 +62,7 @@ NAV = ('<div class="nav"><a href="index.html">← 目次</a>'
        '<a href="README.html">README</a>'
        '<a href="physical-ai-realtime.html">リアルタイム制約</a>'
        '<a href="design-qa.html">設計 Q&amp;A</a>'
+       '<a href="code-map.html">コード地図</a>'
        '<a href="results/pinball.html">走行の記録</a></div>')
 
 #: (元ファイル, 出力名, 説明)。存在しないものは黙って飛ばす
@@ -70,6 +71,7 @@ DOCS = [
     ("docs/physical-ai-realtime.md", "physical-ai-realtime.html",
      "Physical AI のリアルタイム運用課題（実測）"),
     ("docs/design-qa.md", "design-qa.html", "設計 Q&A — なぜこの題材にしたか"),
+    ("docs/code-map.md", "code-map.html", "コード地図 — 構造・依存・移植の単位"),
     ("results/pinball_matrix.md", "pinball_matrix.html", "パドル制御層の差し替え比較"),
     ("results/benchmark.md", "benchmark.html", "マシンベンチマーク"),
     ("results/flight_bench.md", "flight_bench.html", "パラシュート降下ベンチ"),
@@ -253,6 +255,8 @@ def check_links(out: pathlib.Path) -> list[tuple[str, str]]:
     pat = re.compile(r"""(?:href|src)\s*=\s*["\']([^"\'#]+)""")
     bad: list[tuple[str, str]] = []
     for f in sorted(out.rglob("*.html")):
+        if "prev" in f.relative_to(out).parts:
+            continue          # 前版は当時のスクリプトが組むので対象外
         for m in pat.finditer(f.read_text(errors="ignore")):
             h = m.group(1)
             if h.startswith(("http://", "https://", "mailto:", "data:")):
@@ -294,6 +298,13 @@ def main(out_dir: str = "_site") -> None:
     hc = head_commit()
     if hc:
         b.append(f"<p class='lede'>基準コミット: <code>{html.escape(hc)}</code></p>")
+    # 改修の前後を並べて確かめられるように、1 つ前の版も同じサイトに載せている。
+    # 公開しているのは最新だけなので、これが無いと「戻すべきか」を判断できない。
+    if (out / "prev" / "index.html").exists():
+        b.append("<p class='lede'><span class='tag' style='color:#ffd24d;"
+                 "border-color:#ffd24d'>比較</span>"
+                 "1 つ前の版を <a href='prev/index.html'>/prev/</a> に置いてある。"
+                 "改修の前後を並べて確かめられる。</p>")
     b += ["<h2>まず読むもの</h2>",
           "<div class='card'><h3><a href='results/pinball.html'>"
           "ピンボール — 4 層が別クロックで同居する走行</a></h3>"

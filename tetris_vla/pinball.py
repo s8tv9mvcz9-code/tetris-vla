@@ -72,7 +72,19 @@ BLOCK_H = 1.4
 PADDLE_Y = 29.0
 PADDLE_W = 7.2
 BALL_R = 0.45
-AIM_GAIN = 7.0            # パドル端で当てたときに横速度へ乗る量 (狙いの強さ)
+#: パドル端で当てたときに横速度へ乗る量 (狙いの強さ = 操舵権限)。
+#:
+#: 7.0 だと狙い指令の **49% が飽和** していた (中央値 0.98 = ほぼ常に振り切り)。
+#: ジグを横一列に並べた結果、端から端へ振り分けるのに必要な横速度の変化量が
+#: 最大 10 前後になり、7.0 では届かない。権限が足りないので、
+#: どこを狙っても結果が変わらず、腕前がスコアに出なかった。
+#:
+#: 18.0 にすると 10 seed で解析解 844±13 / 無作為 644 となり、差が +44 から
+#: +201 に開く。狙い命中率自体は 27〜31% (偶然 16.7%) で頭打ちだが、
+#: 権限があると外したときの代償も大きくなるので、腕前が効くようになる。
+#: パドル速度を上げると命中率は 41% まで伸びる一方、無作為でも球を拾えてしまい
+#: 差が消えるため、速度は据え置く。
+AIM_GAIN = 18.0
 DOCK = (1.5, 30.5)        # 救済機の待機位置
 
 
@@ -133,6 +145,43 @@ class Gate:
     y: float
     w: float
     open: bool = False
+
+
+@dataclass
+class Kicker:
+    """吸収射出機。ジグの隙間を抜けた球を捕まえ、狙った工程へ撃ち出す。
+
+    球が届く高さは初速で決まってしまうので、パドルだけだとジグを 1 列にしか
+    置けない。上から撃ち出せる口を作ると、**弾道の幾何が決めていた到達範囲の
+    外側に解が作れる**。ラインでいえば移載機で、工程の順序を物理配置から
+    切り離すのと同じ役割。
+
+    捕まえてから撃つまでに `dwell` の間があるので、**その間に狙いを決め直せる**。
+    パドル (速いが間接的) と並ぶ、もう 1 つの操作点になる。
+    """
+
+    y: float = 15.4              # ジグ列 (y=18.0) より上。抜けてきた球を捕まえる
+    #: 受け皿の中心と半幅。**盤面全部で捕まえてはいけない。**
+    #: 全幅で捕まえると誰が撃っても狙いどおり入るので、無作為なパドルでも
+    #: 満点が出て腕前が消える (実測: 無作為 850 点 / 均等性 1.0)。
+    #: 狭い口にすると「ジグの隙間を抜いて受け皿へ通す」こと自体が技術になり、
+    #: 通せた者だけが「どの工程へでも直接入れられる」という利得を得る。
+    cx: float = 12.0
+    half_w: float = 0.7
+    #: 捕獲から射出までの段取り時間。**保持している間その球は工程を回せない**ので、
+    #: ここが短いと捕獲がただの利得になり、誰が撃っても得をして腕前が消える。
+    #: 70 まで伸ばすと「受け皿へ通す価値があるか」の判断が生まれ、順序が戻る。
+    #:
+    #:   口幅 / 段取り   解析解  mock0.5  無作為   単調
+    #:    1.6 /  24       794      825     670    ×
+    #:    1.0 /  24       825      793     687    ○
+    #:    0.7 /  70       815      786     635    ○   ← 採用 (差 +180)
+    dwell: int = 70
+    x: float = 0.0               # 捕獲した位置
+    loaded: bool = False
+    timer: int = 0
+    target: int | None = None    # 撃ち出す先の工程
+    shots: int = 0
 
 
 @dataclass
@@ -253,6 +302,9 @@ def build_ladder() -> list[Rung]:
         # 危険域にボールが入ったら許可を落とす (下位ラングで打ち消す)
         Rung("R6 危険域で許可解除", [["ball_in_danger"], ["drone_abort"]], "repair_cancel",
              comment="危険域侵入または中断要求で許可を取り消す"),
+        # 射出許可: 装填済みで、救済機が飛んでいないこと
+        Rung("R7 射出許可", [["kicker_loaded", "!drone_active"]], "kick_ok",
+             comment="装填済みかつ救済機が飛んでいなければ射出してよい"),
     ]
 
 
@@ -407,6 +459,9 @@ class PinballWorld:
                 vx=cfg.ball_speed0 * math.sin(ang), vy=abs(cfg.ball_speed0 * math.cos(ang))))
         self.jigs = self._make_jigs()
         self.gates = [Gate(0, 7.0, 21.0, 4.0), Gate(1, 17.0, 21.0, 4.0)]
+        self.kicker = Kicker()
+        #: 上位層が指している工程。射出の向きに使う
+        self.aim_target: int | None = None
         self.stall = 0
         #: 最後に工程が進んだ (ブロックが崩れた) tick。滞留判定の基準
         self.last_progress_tick = 0
@@ -485,6 +540,7 @@ class PinballWorld:
             "jig_broken": any(j.broken and not j.repairing for j in self.jigs),
             "ball_in_danger": any(b.y > self.cfg.danger_y for b in alive),
             "drone_abort": self.drone.failed_reason is not None,
+            "kicker_loaded": self.kicker.loaded,
         }
 
     # -- 物理 -------------------------------------------------------------
@@ -526,6 +582,39 @@ class PinballWorld:
                         j.broken = True
                         self.events.append({"tick": self.tick, "kind": "jig_broken",
                                             "jid": j.jid, "hits": j.hits})
+
+    def _kicker_capture(self, b: Ball) -> bool:
+        """ジグ列を抜けて上がってきた球を捕まえる。捕まえたら True。"""
+        k = self.kicker
+        if k.loaded or b.vy > 0 or b.y > k.y:
+            return False
+        if abs(b.x - k.cx) > k.half_w:      # 受け皿を外れた球は素通り
+            return False
+        k.loaded, k.x, k.timer = True, min(max(b.x, 1.5), FIELD_W - 1.5), k.dwell
+        b.alive = False                      # 保持中は盤面から外す
+        self.events.append({"tick": self.tick, "kind": "kick_load", "x": round(k.x, 1)})
+        return True
+
+    def _kicker_fire(self, target: int | None) -> None:
+        """段取り時間が明けたら、狙った工程へ撃ち出す。
+
+        撃ち出しは真下向きではなく、目標ジグへ向かう向き。弾道の届く範囲に
+        縛られないので、**パドルからは狙えない工程にも直接入れられる**。
+        """
+        k = self.kicker
+        if not k.loaded:
+            return
+        k.timer -= 1
+        if k.timer > 0:
+            return
+        j = self.jigs[target] if target is not None and 0 <= target < len(self.jigs) \
+            else self.jigs[len(self.jigs) // 2]
+        dx, dy = j.x - k.x, max(0.5, j.y - k.y)
+        n = math.hypot(dx, dy)
+        v = self.cfg.ball_speed0
+        self.balls.append(Ball(x=k.x, y=k.y + 0.1, vx=v * dx / n, vy=v * dy / n))
+        k.loaded, k.target, k.shots = False, target, k.shots + 1
+        self.events.append({"tick": self.tick, "kind": "kick_fire", "seg": target})
 
     def _paddle_and_blocks(self, b: Ball) -> None:
         p = self.paddle
@@ -621,6 +710,8 @@ class PinballWorld:
             b.x += b.vx * c.dt
             b.y += b.vy * c.dt
             self._bounce_walls(b)
+            if self._kicker_capture(b):
+                continue        # 捕まえた球はこの tick では以降の判定に出さない
             self._gates(b)
             self._bounce_jigs(b)
             self._paddle_and_blocks(b)
@@ -637,6 +728,8 @@ class PinballWorld:
                 else:
                     b.alive = False
 
+        if bits.get("kick_ok", True):
+            self._kicker_fire(self.aim_target)
         self._drone()
         alive = [b for b in self.balls if b.alive]
         # 滞留タイマ。**位置ではなく「工程が進んでいないこと」で計る**。

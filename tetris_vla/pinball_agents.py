@@ -131,6 +131,13 @@ def render_pinball(w: PinballWorld, px_per_unit: int = 9, target_seg: int | None
         x1, y1 = P(b.x + BALL_R, b.y + BALL_R)
         d.ellipse([x0, y0, x1, y1], fill=BALL_C)
 
+    # 吸収射出の受け皿
+    k = w.kicker
+    kx0, ky0 = P(k.cx - k.half_w, k.y - 0.5)
+    kx1, ky1 = P(k.cx + k.half_w, k.y + 0.5)
+    d.rectangle([kx0, ky0, kx1, ky1],
+                fill=(90, 200, 255) if k.loaded else None, outline=(70, 130, 170), width=2)
+
     # 救済機
     if w.drone.active:
         x0, y0 = P(w.drone.x - 0.5, w.drone.y - 0.5)
@@ -627,6 +634,7 @@ def run_stack(
                 note=f"この推論の間に {d} tick 進む = 助言は {d*world.cfg.dt:.2f}秒 古い盤面のもの"))
             if "target_seg" in advice:
                 target_seg = advice["target_seg"]
+                world.aim_target = target_seg   # 射出機もこの狙いへ撃つ
                 cmd_queue.clear()      # 目標が変わったら行動列を捨てる
             seq.vlm_advice = advice
             log(f"\n[{n}] VLM t={world.t:.1f}s lat={lat:.2f}s → 狙い=セグ{advice.get('target_seg')} "
@@ -766,6 +774,7 @@ def collect_pinball_expert(n_episodes: int = 24, chunk: int = 25, stride: int = 
         while not w.done:
             if w.tick % 150 == 0:
                 target = strat(w)[0].get("target_seg")
+            w.aim_target = target
             bits = plc.scan(w.ladder_inputs())
             seq.step(w.tick, w, bits)
             cmd, _ = teacher(w, target)

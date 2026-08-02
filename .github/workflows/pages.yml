@@ -23,20 +23,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # build_site.py が基準コミットを出すのに git log を使う
-          fetch-depth: 1
+          # 前版を /prev/ に併載するので、1 つ前のコミットまで要る
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       # 依存は標準ライブラリだけ。pip install する物は無い
       - name: サイトを組む
         run: python3 scripts/build_site.py _site
+
+      # 直前の版を /prev/ に併載する。Pages は最新しか出ないので、
+      # 改修の前後を並べて確かめられないと、戻すべきかの判断ができない。
+      # **前版はその時点のスクリプトで組む** (当時の見た目をそのまま出す)。
+      # 失敗しても本体は出す。
+      - name: 前版を併載する
+        continue-on-error: true
+        run: |
+          git worktree add ../prev HEAD~1
+          python3 ../prev/scripts/build_site.py _site/prev
+          echo "前版: $(git -C ../prev log -1 --format='%h %s')"
+
+      - name: 前版が無い場合の後始末
+        run: |
+          if [ ! -f _site/prev/index.html ]; then
+            echo "前版を組めなかったので /prev/ は出さない"
+            rm -rf _site/prev
+          fi
       - name: 中身の確認
         run: |
           test -f _site/index.html
           test -f _site/README.html
           test -f _site/.nojekyll
           echo "生成ファイル数: $(find _site -type f | wc -l)"
+          [ -d _site/prev ] && echo "前版も併載" || echo "前版なし"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
