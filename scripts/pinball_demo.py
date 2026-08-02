@@ -41,6 +41,9 @@ def main() -> int:
     ap.add_argument("--max-ticks", type=int, default=5000)
     ap.add_argument("--skill", type=float, default=0.9)
     ap.add_argument("--out", default="results/pinball")
+    # 文脈長。既定 (None) は ollama 任せで従来どおり。常駐メモリが文脈長で
+    # 決まっている仮説を検証するための口 — docs/physical-ai-realtime.md 参照
+    ap.add_argument("--num-ctx", type=int, default=None)
     a = ap.parse_args()
 
     world = PinballWorld(PinballConfig(seed=a.seed, max_ticks=a.max_ticks))
@@ -55,7 +58,7 @@ def main() -> int:
         paddle = SmolVLAPaddle(checkpoint=a.checkpoint, chunk=a.chunk)
 
     if a.strategy == "vlm":
-        strat = VLMStrategist(model=a.model)
+        strat = VLMStrategist(model=a.model, num_ctx=a.num_ctx)
         print(strat.health(), file=sys.stderr)
     else:
         strat = HeuristicStrategist()

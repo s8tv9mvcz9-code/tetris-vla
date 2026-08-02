@@ -398,11 +398,18 @@ class VLMStrategist:
 
     def __init__(self, model: str = "qwen2.5vl:3b", host: str = "http://localhost:11434",
                  num_predict: int = 44, timeout: float = 900.0,
-                 unload_after: bool = True, px_per_unit: int = 6) -> None:
+                 unload_after: bool = True, px_per_unit: int = 6,
+                 num_ctx: int | None = None) -> None:
         import httpx
 
         self.model, self.host = model, host.rstrip("/")
         self.num_predict, self.unload_after = num_predict, unload_after
+        #: 文脈長。**None なら ollama の既定に任せる (従来どおりの挙動)**。
+        #: 常駐が 3.7GB -> 5.6GB に膨らんだ件は、画像を面積 44% に落としても
+        #: 変わらなかったので、効いているのは画像側ではなく文脈長に対する
+        #: KV キャッシュの確保だと見ている。**絞れば戻るかは未検証**であり、
+        #: これはその検証を可能にするための口。docs/physical-ai-realtime.md 参照。
+        self.num_ctx = num_ctx
         #: VLM に渡す画像の縮尺。**常駐メモリを直接決める**。
         #: 8GB 機で 9px/unit (216x288) にすると qwen の常駐が 3.7GB -> 5.6GB に膨らみ、
         #: 空きメモリ 6% まで落ちてスワップし、1 回の推論が 400 秒に達した。
@@ -446,7 +453,8 @@ class VLMStrategist:
                 "model": self.model, "prompt": prompt,
                 "images": [base64.b64encode(png).decode("ascii")],
                 "stream": False, "format": "json", "keep_alive": "30m",
-                "options": {"temperature": 0.0, "num_predict": self.num_predict}})
+                "options": {"temperature": 0.0, "num_predict": self.num_predict,
+                            **({"num_ctx": self.num_ctx} if self.num_ctx else {})}})
             r.raise_for_status()
             raw = r.json().get("response", "")
         except Exception as exc:
