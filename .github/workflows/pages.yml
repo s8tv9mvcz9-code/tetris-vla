@@ -1,0 +1,52 @@
+name: Pages
+
+# ドキュメントと成果物を GitHub Pages に出す。
+# 生成物はリポジトリに置かない (main に push するたびここで組み直す)。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 走行中に別の push が来たら、古い方は捨てて新しい方を通す
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build_site.py が基準コミットを出すのに git log を使う
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # 依存は標準ライブラリだけ。pip install する物は無い
+      - name: サイトを組む
+        run: python3 scripts/build_site.py _site
+      - name: 中身の確認
+        run: |
+          test -f _site/index.html
+          test -f _site/README.html
+          test -f _site/.nojekyll
+          echo "生成ファイル数: $(find _site -type f | wc -l)"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
