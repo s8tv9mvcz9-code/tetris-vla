@@ -376,12 +376,22 @@ Rules:
   A repair drone can fix it, but the repair FAILS if the drone touches the ball,
   the paddle, or a healthy bumper.
 
+- A bumper that starts producing FIT FAILURES is wearing out: the ball still
+  bounces, but the process no longer advances. This is the only warning you get
+  before it breaks completely.
+
 Telemetry:
-- blocks remaining per column (0..{maxseg}): {blocks}
-- blocks already removed per column: {removed}
+- blocks already removed per column (0..{maxseg}): {removed}   <- balance THIS
+- blocks remaining per column: {blocks}
 - bumper hit counters: {jigs}
 - ball: {ball}
 - broken bumpers: {broken}
+
+How to choose:
+1. Discard columns whose bumper is broken, and columns with 0 blocks remaining.
+2. Among the rest, prefer the column with the SMALLEST "already removed" count.
+   Least-done columns right now: {least}
+3. Break ties by preferring a bumper with fewer fit failures.
 
 Choose ONE segment to prioritise next, and decide whether a repair is safe right now.
 Reply with JSON only:
@@ -436,10 +446,22 @@ class VLMStrategist:
 
     def build_prompt(self, tel: dict) -> str:
         ball = tel["balls"][0] if tel["balls"] else {}
+        done = tel["broken_per_col"]
+        left = tel["blocks_left_per_col"]
+        # 実測で qwen は同じ列を答え続け、均等性が 0.75 -> 0.25 に崩れた。
+        # 「EVENLY に」と書くだけでは 3B には届かないので、候補集合まで詰めて渡す。
+        # 選ぶ行為そのものはモデルに残してある (ここで 1 つに決めてしまうと
+        # ヒューリスティックの薄い皮になり、比較の意味が消える)
+        ok = [c for c in range(N_SEG)
+              if left[c] > 0 and not tel["jigs"][c]["broken"]]
+        least = sorted(ok, key=lambda c: done[c])[:3] if ok else "none"
         return STRATEGY_PROMPT.format(
             nseg=N_SEG, maxseg=N_SEG - 1,
-            blocks=tel["blocks_left_per_col"], removed=tel["broken_per_col"],
-            jigs=[{"id": j["jid"], "hits": j["hits"]} for j in tel["jigs"]],
+            blocks=left, removed=done, least=least,
+            # fit_ng を渡していなかった。素通りより手前で劣化に気づける
+            # 唯一の観測量なので、これが無いと予防的な振り分けができない
+            jigs=[{"id": j["jid"], "hits": j["hits"], "fit_fail": j["fit_ng"]}
+                  for j in tel["jigs"]],
             ball={k: ball.get(k) for k in ("x", "y", "vy")},
             broken=[j["jid"] for j in tel["jigs"] if j["broken"]] or "none")
 
