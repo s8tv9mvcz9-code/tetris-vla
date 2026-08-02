@@ -82,7 +82,7 @@ def test_vent_only_when_not_thrusting_sideways() -> None:
 # --- 観測のエンコード -----------------------------------------------------
 
 
-def test_state_is_six_dims_and_bounded() -> None:
+def test_state_matches_the_declared_dim_and_is_bounded() -> None:
     obs = _obs()
     s = encode_state(obs, target_col=3)
     assert s.shape == (STATE_DIM,)

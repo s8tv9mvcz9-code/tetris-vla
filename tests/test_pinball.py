@@ -402,7 +402,8 @@ def test_layers_run_at_their_own_clocks() -> None:
 def test_vla_call_records_its_inputs_and_outputs() -> None:
     _, res = _stack(seed=3)
     c = next(c for c in res["calls"] if c["layer"] == "vla")
-    assert "state6" in c["inputs"] and len(c["inputs"]["state6"]) == 6
+    # 着弾予測を足して 8 次元。決まった計算は渡す側に置く、という分業
+    assert "state" in c["inputs"] and len(c["inputs"]["state"]) == 8
     assert "target_seg" in c["inputs"]
     assert c["output"]["chunk_len"] >= 1
 

@@ -174,7 +174,7 @@ class LayerCall:
 def predict_landing_x(w: PinballWorld) -> float | None:
     """ボールがパドル高さに来るときの x を、壁反射込みで素朴に外挿する。
 
-    これは **教師データ生成と mock のため** のもので、実運用の VLA には渡さない。
+    決まった計算なので、教師・mock だけでなく **学習側の観測にも渡す** (encode_state 参照)。
     """
     alive = [b for b in w.balls if b.alive]
     if not alive:
@@ -307,7 +307,7 @@ class SmolVLAPaddle:
         from .smolvla_pilot import build_policy, pick_device
 
         self.policy, self.pre, self.post, self.cfg, dev = build_policy(
-            device, chunk_size=chunk)
+            device, chunk_size=chunk, state_dim=8)   # 着弾予測を足した分
         if checkpoint:
             sd = torch.load(checkpoint, map_location="cpu")
             self.policy.load_state_dict(sd["model"])
@@ -319,10 +319,17 @@ class SmolVLAPaddle:
 
     @staticmethod
     def encode_state(w: PinballWorld, target_seg: int | None) -> np.ndarray:
-        """6 次元。最後が **目標ジグの位置** (上位からの指令)。
+        """8 次元。目標ジグの位置 (上位からの指令) と、着弾点の予測を含む。
 
-        「そこへ返すにはパドルのどこに当てればよいか」の弾道計算は渡さない。
-        そこを学習させたいので、教師の中間結果は入力に入れない。
+        当初は着弾予測を伏せていた (「そこを学習させたいから教師の中間結果は渡さない」)。
+        だがこれは分業の切り方として無理があった。着弾予測は壁反射込みの弾道外挿で、
+        **解析的に厳密に解ける量**。それを 450M・視覚凍結のモデルに、1000 サンプル程度の
+        模倣で再発見させようとしていたことになる。実際 BC は無作為にも負けた。
+
+        現場の分け方に寄せるなら、決まった計算はセンサ側 / PLC 側で出して渡し、
+        学習側は **その値をどう使うか** を担当する。ここではその線で引き直した:
+        弾道は与える、狙いの詰め方は学習させる。
+
         降りてくるボールは **最初に着弾するもの** を基準にする (2 個あるため)。
         """
         alive = [b for b in w.balls if b.alive]
@@ -331,6 +338,7 @@ class SmolVLAPaddle:
                 default=None) if alive else None
         tgt_x = w.jigs[target_seg].x if target_seg is not None and 0 <= target_seg < len(w.jigs) \
             else w.paddle.x
+        land = predict_landing_x(w)
         return np.array([
             w.paddle.x / FIELD_W * 2 - 1,
             (b.x / FIELD_W * 2 - 1) if b else 0.0,
@@ -338,6 +346,9 @@ class SmolVLAPaddle:
             (b.vx / 20.0) if b else 0.0,
             (b.vy / 20.0) if b else 0.0,
             tgt_x / FIELD_W * 2 - 1,
+            # 着弾点の予測と、そこまでの距離。決まった計算なので与える側に置く
+            (land / FIELD_W * 2 - 1) if land is not None else 0.0,
+            ((land - w.paddle.x) / FIELD_W * 2) if land is not None else 0.0,
         ], dtype=np.float32)
 
     def plan(self, w: PinballWorld, target_seg: int | None) -> tuple[list[float], float, dict]:
@@ -636,7 +647,7 @@ def run_stack(
             calls.append(LayerCall(
                 seq=n, layer="vla", tick=tick, t=round(world.t, 2), latency_s=round(lat, 3),
                 inputs={"target_seg": target_seg,
-                        "state6": [round(float(v), 3) for v in
+                        "state": [round(float(v), 3) for v in
                                    SmolVLAPaddle.encode_state(world, target_seg)]},
                 output={"chunk_len": len(cmds), "first6": [round(v, 3) for v in cmds[:6]]},
                 raw=json.dumps({"cmds": [round(v, 3) for v in cmds[:12]]}),
@@ -735,7 +746,7 @@ def pinball_task(target_seg) -> str:
 
 def collect_pinball_expert(n_episodes: int = 24, chunk: int = 25, stride: int = 2,
                            seed0: int = 500, max_ticks: int = 2200, progress=None):
-    """ScriptedPaddle を教師に (画像, state6, 行動列) を集める。
+    """ScriptedPaddle を教師に (画像, state, 行動列) を集める。
 
     上位の目標セグメントは HeuristicStrategist が与える。**学習後にその指令元を
     VLM へ差し替えられる** ようにするため、目標は必ず state と指示文の両方に入れる。

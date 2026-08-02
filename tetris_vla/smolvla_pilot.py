@@ -66,6 +66,9 @@ def task_for(target_col: int | None) -> str:
         return TASK_INSTRUCTION
     return f"land the falling block in column {int(target_col)}"
 
+#: 既定の状態次元 (パラシュート題材)。**題材ごとに違う** ので、
+#: build_policy / train_bc に state_dim を渡して上書きする。
+#: ピンボールは着弾予測を足して 8 次元。
 STATE_DIM = 6
 ACTION_DIM = 6
 IMG_SIZE = 256
@@ -171,7 +174,7 @@ def pick_device(prefer: str = "auto") -> str:
 
 
 def build_policy(device: str = "auto", pretrained: str | None = "lerobot/smolvla_base",
-                 chunk_size: int = 50):
+                 chunk_size: int = 50, state_dim: int = STATE_DIM):
     """この課題の入出力次元に合わせた SmolVLA を作る。
 
     state 6 / action 6 / カメラ 1 本。事前学習重みの入出力射影は 32 次元にパディング
@@ -186,7 +189,7 @@ def build_policy(device: str = "auto", pretrained: str | None = "lerobot/smolvla
     dev = pick_device(device)
     cfg = SmolVLAConfig(
         input_features={
-            "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(STATE_DIM,)),
+            "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(state_dim,)),
             "observation.images.camera1": PolicyFeature(
                 type=FeatureType.VISUAL, shape=(3, IMG_SIZE, IMG_SIZE)),
         },
@@ -197,7 +200,7 @@ def build_policy(device: str = "auto", pretrained: str | None = "lerobot/smolvla
     )
     # 状態も行動もこちらで [-1,1] に収めてあるので、正規化は恒等にする
     stats = {
-        "observation.state": {"mean": torch.zeros(STATE_DIM), "std": torch.ones(STATE_DIM)},
+        "observation.state": {"mean": torch.zeros(state_dim), "std": torch.ones(state_dim)},
         "action": {"mean": torch.zeros(ACTION_DIM), "std": torch.ones(ACTION_DIM)},
     }
     if pretrained:
@@ -372,7 +375,8 @@ def train_bc(
     """
     import torch
 
-    policy, pre, post, cfg, dev = build_policy(device, chunk_size=chunk)
+    sd = int(samples[0].state.shape[-1]) if samples else STATE_DIM
+    policy, pre, post, cfg, dev = build_policy(device, chunk_size=chunk, state_dim=sd)
     policy.train()
     params = [p for p in policy.parameters() if p.requires_grad]
     n_train = sum(p.numel() for p in params)
