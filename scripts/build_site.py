@@ -62,7 +62,7 @@ NAV = ('<div class="nav"><a href="index.html">← 目次</a>'
        '<a href="README.html">README</a>'
        '<a href="physical-ai-realtime.html">リアルタイム制約</a>'
        '<a href="design-qa.html">設計 Q&amp;A</a>'
-       '<a href="results/pinball_slow_vlm.html">走行の記録</a></div>')
+       '<a href="results/pinball.html">走行の記録</a></div>')
 
 #: (元ファイル, 出力名, 説明)。存在しないものは黙って飛ばす
 DOCS = [
@@ -78,16 +78,31 @@ DOCS = [
 
 #: 成果物の一言説明。無いものは説明なしで並べる
 NOTES = {
-    "pinball_slow_vlm.html":
-        "実機 qwen ＋ 低速 sim ＋ 強化プロンプト。ヒューリスティックの 97%",
-    "pinball_long_vlm.html": "実機 qwen。助言が 150 tick 古いと 1298 tick で全滅",
-    "pinball_long_heur.html": "対照群 (VLM なし)。6000 tick 完走",
-    "pinball_vlm.html": "初期の実機 qwen 走行 (陳腐化が上限で潰れていた頃)",
-    "pinball.html": "ヒューリスティック戦略層の標準走行",
+    "pinball.html": "産業制御 × Physical AI。タクト図・ラダー図・状態遷移・"
+                    "ST コード・4 段タイムライン",
+    "pinball.svg": "同じ走行の盤面アニメーション単体",
     "flock.html": "群れ制御",
-    "flight_pd.html": "パラシュート降下",
-    "decisions.html": "途中判断の比較",
+    "flight_pd.html": "パラシュート降下 + 推進ジェット",
+    "decisions.html": "テトリス — 同じ盤面に対する各方式の判断の突き合わせ",
 }
+
+
+#: 変換元 .md -> 出力 .html の対応。出力はフラットなので、
+#: リンク中の `docs/xxx.md` から docs/ を落として解決する必要がある。
+#: DOCS から機械的に作るので、片方だけ直して食い違うことがない。
+_LINK_MAP: dict[str, str] = {}
+
+
+def _rewrite_md_link(target: str) -> str | None:
+    """`.md` へのリンクを、出力側のファイル名に写像する。対象外なら None。"""
+    t = target.lstrip("./")
+    if t in _LINK_MAP:
+        return _LINK_MAP[t]
+    base = t.rsplit("/", 1)[-1]
+    for src, dst in _LINK_MAP.items():
+        if src.rsplit("/", 1)[-1] == base:
+            return dst
+    return None
 
 
 def _inline(s: str) -> str:
@@ -105,8 +120,17 @@ def _inline(s: str) -> str:
         return f"\x00{len(spans) - 1}\x00"
 
     s = re.sub(r"`([^`]+)`", stash, s)
-    # .md へのリンクは変換後の .html に張り替える
-    s = re.sub(r"\[([^\]]+)\]\(([^)]+?)\.md\)", r'<a href="\2.html">\1</a>', s)
+    # .md へのリンクは出力側のファイル名へ張り替える。
+    # 対応が無ければリポジトリの該当ファイルへ逃がす (サイト内で切れさせない)
+    def _md(m: re.Match) -> str:
+        label, target = m.group(1), m.group(2) + ".md"
+        dst = _rewrite_md_link(target)
+        if dst:
+            return f'<a href="{dst}">{label}</a>'
+        return (f'<a href="https://github.com/s8tv9mvcz9-code/tetris-vla/blob/main/'
+                f'{target.lstrip("./")}">{label}</a>')
+
+    s = re.sub(r"\[([^\]]+)\]\(([^)]+?)\.md\)", _md, s)
     s = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', s)
     s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
     s = re.sub(r"(?<![*\w])\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", s)
@@ -218,12 +242,32 @@ def head_commit() -> str:
         return ""
 
 
+def check_links(out: pathlib.Path) -> list[tuple[str, str]]:
+    """出力サイト内のリンクが全部解決するか確かめる。
+
+    手で点検すると必ず抜けるので、ビルドの一部にして落とす。
+    成果物を消したり増やしたりしたときに、目次や本文の参照が置き去りになるのを防ぐ。
+    """
+    pat = re.compile(r"""(?:href|src)\s*=\s*["\']([^"\'#]+)""")
+    bad: list[tuple[str, str]] = []
+    for f in sorted(out.rglob("*.html")):
+        for m in pat.finditer(f.read_text(errors="ignore")):
+            h = m.group(1)
+            if h.startswith(("http://", "https://", "mailto:", "data:")):
+                continue
+            if not (f.parent / h).resolve().exists():
+                bad.append((str(f.relative_to(out)), h))
+    return bad
+
+
 def main(out_dir: str = "_site") -> None:
     out = pathlib.Path(out_dir)
     if out.exists():
         shutil.rmtree(out)
     (out / "results").mkdir(parents=True)
 
+    _LINK_MAP.clear()
+    _LINK_MAP.update({src: dst for src, dst, _ in DOCS})
     made = []
     for src, dst, desc in DOCS:
         p = ROOT / src
@@ -249,11 +293,11 @@ def main(out_dir: str = "_site") -> None:
     if hc:
         b.append(f"<p class='lede'>基準コミット: <code>{html.escape(hc)}</code></p>")
     b += ["<h2>まず読むもの</h2>",
-          "<div class='card'><h3><a href='results/pinball_slow_vlm.html'>"
-          "実機 qwen の走行（図つき）</a></h3>"
-          "<p>推論 1 回 374 秒。題材の時定数を伸ばして遅さを吸収し、プロンプトを"
-          "直したところ、ヒューリスティックの 97% まで来た。ラダー図・通電表示・"
-          "全体像・遷移図・4 段タイムライン入り。</p></div>",
+          "<div class='card'><h3><a href='results/pinball.html'>"
+          "ピンボール — 4 層が別クロックで同居する走行</a></h3>"
+          "<p>工程のタクト、ラダー図と通電表示、状態遷移、同じ論理の ST コード、"
+          "そして VLM の助言・シーケンサ・盤面の事故・工程消化を重ねた"
+          "4 段タイムライン。</p></div>",
           "<div class='card'><h3><a href='README.html'>README</a></h3>"
           "<p>3 つの中心的な発見。3 つめが上の実機の話。</p></div>",
           "<h2>ドキュメント</h2>"]
@@ -268,7 +312,12 @@ def main(out_dir: str = "_site") -> None:
                                          "\n".join(b), nav=False), encoding="utf-8")
     # Jekyll に処理させない (results/ の自己完結 HTML をそのまま出すため)
     (out / ".nojekyll").write_text("", encoding="utf-8")
-    print(f"docs {len(made)} / artifacts {len(arts)} -> {out}")
+    broken = check_links(out)
+    if broken:
+        for f, h in broken:
+            print(f"リンク切れ: {f} -> {h}", file=sys.stderr)
+        raise SystemExit(f"リンク切れ {len(broken)} 件。サイトを出さない")
+    print(f"docs {len(made)} / artifacts {len(arts)} -> {out}  (リンク切れなし)")
 
 
 if __name__ == "__main__":
