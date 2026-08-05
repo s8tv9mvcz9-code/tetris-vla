@@ -15,3 +15,7 @@ checkpoints/
 
 # GitHub Pages のビルド出力 (Actions で組み直すので追跡しない)
 _site/
+
+# Rust (rtsdk)
+target/
+**/*.rs.bk

@@ -1,0 +1,12 @@
+[package]
+name = "zoneguard"
+description = "空間排他を型状態で持つ機構モデル。干渉は実行時ではなくコンパイル時に落ちる"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pulse-trace = { workspace = true }
+vtime = { workspace = true }

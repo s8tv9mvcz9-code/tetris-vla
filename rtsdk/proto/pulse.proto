@@ -1,0 +1,37 @@
+// パルス波形の交換形式。
+//
+// 制御側 (Rust / Wasm) と UI と外部の解析ツールが、この 1 枚だけを共有する。
+// Rust 側の実装は crates/pulse-trace/src/lib.rs の `Recorder::encode_proto` にあり、
+// 固定バッファ上の varint 直書き (依存も確保も無し) で、この定義と 1 対 1 に対応する。
+//
+// 世代を跨いで読めるように、フィールド番号は再利用しない。
+syntax = "proto3";
+
+package rtsdk.pulse;
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  TASK_RISE = 1;      // 立ち上がりエッジ (Wasm インスタンス起動)
+  TASK_FALL = 2;      // 立ち下がりエッジ (消滅)
+  ZONE_ENTER = 3;     // 排他ゾーン進入      a = zone id
+  ZONE_EXIT = 4;      // 排他ゾーン退出      a = zone id
+  AXIS_POS = 5;       // 軸位置              a = 位置 [µm]
+  VIOLATION = 6;      // 空間セマンティクス違反 a = 規則 id, b = 実測 [µm]
+  DEADLINE_MISS = 7;  // デッドライン超過    a = 予算 [µs], b = 実績 [µs]
+  PERMIT_TAKE = 8;    // 排他トークン取得    a = zone id
+  PERMIT_DROP = 9;    // 排他トークン返却    a = zone id
+  MARK = 10;          // 設計側の目盛
+}
+
+message Ev {
+  uint64 t_us = 1;    // 仮想時間 [µs]。実時間ではない。
+  uint32 lane = 2;    // 縦軸レーン (タスク / 軸 / SDK ライフサイクル)
+  Kind kind = 3;
+  sint32 a = 4;
+  sint32 b = 5;
+}
+
+message Trace {
+  repeated Ev events = 1;
+  uint32 dropped = 2;  // レコーダ容量を超えて捨てた件数
+}

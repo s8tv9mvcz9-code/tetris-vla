@@ -1,0 +1,16 @@
+[package]
+name = "legacy-bridge"
+description = "既存 C++ 資産を unsafe で包み、実時計を仮想時間に差し替える橋渡し"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pulse-trace = { workspace = true }
+vtime = { workspace = true }
+zoneguard = { workspace = true }
+
+[build-dependencies]
+cc = "1"

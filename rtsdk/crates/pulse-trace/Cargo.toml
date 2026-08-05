@@ -1,0 +1,13 @@
+[package]
+name = "pulse-trace"
+description = "パルス波形イベントの型と、固定長バッファのレコーダ (no_std / 動的確保なし)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# std を有効にすると JSON の読み戻し (UI 側で使う) が付く。制御側は default のまま。
+std = []

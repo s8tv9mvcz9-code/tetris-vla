@@ -136,3 +136,24 @@ python3 scripts/build_site.py _site                       # 標準ライブラ�
 | `test_the_task_is_a_usable_instrument` | 題材の変動係数が小さいまま保たれること |
 | `test_st_is_generated_from_the_implementation_not_hardcoded` | ST が実装から導出され続けること |
 | `test_kicker_only_catches_balls_through_the_saucer` | 吸収射出が腕前を代替しないこと |
+
+---
+
+## rtsdk/ — 型で干渉を消す側 (Rust)
+
+`rtsdk/` は Python 本体とは別系統の PoC で、依存も走らせ方も独立している
+(`cd rtsdk && cargo test`)。ピンボール題材で測った「層ごとに別のクロックが同居する」
+話を、測定ではなく**型**の側に置けるかを見るためのもの。
+
+| クレート | 中身 | 依存 |
+|---|---|---|
+| `pulse-trace` | 事象の型と固定長レコーダ (`no_std`, 確保なし) | なし |
+| `vtime` | 仮想時間モナド。Δt 注入と WCET の型レベル加算 | `pulse-trace` |
+| `zoneguard` | 型状態のアーム、ゾーンごとに 1 枚の排他トークン | 上記 |
+| `legacy-bridge` | C++ 資産の `unsafe` 包み + 決定的な離散事象スケジューラ | 上記 + `cc` |
+| `sim-harness` | 空間セマンティクス DSL、シミュレータ、TDD ランナー | 上記 |
+| `ui-pulse` | パルスグラフ (egui/Wasm)。重ね合わせ・因果・タイムトラベル | `pulse-trace` + `egui` |
+
+移植の単位としては `pulse-trace` / `vtime` / `zoneguard` の 3 つが `no_std` で完結していて、
+そのまま他のプロジェクトへ持っていける。Python 側の制御をこの基板へ移す段取りは
+[rtsdk/README.md](../rtsdk/README.md) の最後の節にある。

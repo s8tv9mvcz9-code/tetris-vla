@@ -1,0 +1,11 @@
+[package]
+name = "vtime"
+description = "仮想時間モナド。Δt を外から注入し、WCET を型の上で足し上げる"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pulse-trace = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name = "sim-harness"
+description = "3D 空間セマンティクスを #[test] に落とすシミュレータと TDD ランナー"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pulse-trace = { workspace = true, features = ["std"] }
+vtime = { workspace = true }
+zoneguard = { workspace = true }
+legacy-bridge = { workspace = true }
+
+[[bin]]
+name = "dump-traces"
+path = "src/bin/dump_traces.rs"

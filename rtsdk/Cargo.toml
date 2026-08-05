@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pulse-trace",
+    "crates/vtime",
+    "crates/zoneguard",
+    "crates/legacy-bridge",
+    "crates/sim-harness",
+    "crates/ui-pulse",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+pulse-trace = { path = "crates/pulse-trace" }
+vtime = { path = "crates/vtime" }
+zoneguard = { path = "crates/zoneguard" }
+legacy-bridge = { path = "crates/legacy-bridge" }
+sim-harness = { path = "crates/sim-harness" }
+
+# 実時間で回すときの前提: 割り当てもパニックも巻き戻しも無い。
+# PoC のテストは dev プロファイルで走るので、ここは「本番側の形」を示すためのもの。
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+overflow-checks = true
+debug = 1
